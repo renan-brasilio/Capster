@@ -71,6 +71,16 @@ struct MenuBarView: View {
                 }
 
                 MenuBarActionButton(
+                    title: "Restart Recording",
+                    systemImage: "arrow.counterclockwise.circle",
+                    accentColor: .blue
+                ) {
+                    Task {
+                        await viewModel.restartRecording()
+                    }
+                }
+
+                MenuBarActionButton(
                     title: "Cancel Recording",
                     systemImage: "xmark.circle",
                     accentColor: .red

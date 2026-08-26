@@ -522,6 +522,14 @@ final class RecorderViewModel {
         logger.info("Recording cancelled and discarded")
     }
 
+    /// Discards the current recording and immediately starts a new one against the same
+    /// content selection - for redoing a bad take without re-picking content or area.
+    func restartRecording() async {
+        guard isRecording else { return }
+        await cancelRecording()
+        await startRecording()
+    }
+
     /// Pauses or resumes the current recording.
     ///
     /// The capture stream, camera session, and Presenter Overlay all keep running the

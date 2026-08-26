@@ -58,4 +58,10 @@ struct RecorderViewModelTests {
         let viewModel = RecorderViewModel()
         #expect(viewModel.recordingDuration == 0)
     }
+
+    @Test func restartRecordingIsANoOpWhenNotRecording() async {
+        let viewModel = RecorderViewModel()
+        await viewModel.restartRecording()
+        #expect(viewModel.isRecording == false)
+    }
 }
