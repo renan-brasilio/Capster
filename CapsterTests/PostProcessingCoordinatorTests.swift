@@ -22,10 +22,19 @@ struct PostProcessingCoordinatorTests {
         return url
     }
 
+    /// A signed-in `ChorusSessionService` backed by an in-memory Keychain stub.
+    private func makeSignedInChorusSession() -> ChorusSessionService {
+        let session = ChorusSessionService(keychain: InMemoryKeychainStub())
+        session.save(cookieHeader: "session=test", xsrfToken: "test-xsrf")
+        return session
+    }
+
     @Test func neitherEnabledIsANoOp() async throws {
         let settings = makeSettings()
         let notifications = NotificationService(settings: settings)
-        let coordinator = PostProcessingCoordinator(settings: settings, notificationService: notifications)
+        let coordinator = PostProcessingCoordinator(
+            settings: settings, notificationService: notifications, chorusSession: makeSignedInChorusSession()
+        )
 
         coordinator.start(recordingURL: recordingURL())
         await coordinator.waitUntilFinished()
@@ -39,7 +48,6 @@ struct PostProcessingCoordinatorTests {
         let settings = makeSettings()
         settings.handBrakeTranscodeEnabled = true
         settings.chorusUploadEnabled = true
-        settings.chorusAPIToken = "tok"
         // No HandBrakeCLI located -> transcode step fails with .binaryNotConfigured.
 
         var receivedFileURL: URL?
@@ -49,6 +57,7 @@ struct PostProcessingCoordinatorTests {
         let coordinator = PostProcessingCoordinator(
             settings: settings,
             notificationService: notifications,
+            chorusSession: makeSignedInChorusSession(),
             uploadService: uploadService
         )
 
@@ -81,6 +90,7 @@ struct PostProcessingCoordinatorTests {
         let coordinator = PostProcessingCoordinator(
             settings: settings,
             notificationService: notifications,
+            chorusSession: makeSignedInChorusSession(),
             transcodeService: transcodeService
         )
 
@@ -112,6 +122,7 @@ struct PostProcessingCoordinatorTests {
         let coordinator = PostProcessingCoordinator(
             settings: settings,
             notificationService: notifications,
+            chorusSession: makeSignedInChorusSession(),
             transcodeService: transcodeService
         )
 
@@ -137,9 +148,9 @@ private final class SucceedingTranscodeRunner: ProcessRunning {
     }
 }
 
-/// Captures the file URL the (guessed) Chorus multipart request was built from, by
-/// reading back the `Content-Disposition` filename header - avoids needing a real
-/// network stack while still exercising the real request-building code.
+/// Captures the file URL the Chorus multipart request was built from, by reading back
+/// the `Content-Disposition` filename header - avoids needing a real network stack while
+/// still exercising the real request-building code.
 private final class RecordingUploadStub: HTTPUploading {
     private let onUpload: (URL) -> Void
 

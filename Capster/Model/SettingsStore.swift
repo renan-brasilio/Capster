@@ -758,6 +758,22 @@ final class SettingsStore {
         }
     }
 
+    /// Whether uploads are marked private in Chorus (visible only to the uploader).
+    /// Defaults to on, since a screen recording uploaded automatically shouldn't become
+    /// company-visible without the user having chosen that.
+    var chorusUploadPrivate: Bool {
+        get {
+            access(keyPath: \.chorusUploadPrivate)
+            guard defaults.object(forKey: "chorusUploadPrivate") != nil else { return true }
+            return defaults.bool(forKey: "chorusUploadPrivate")
+        }
+        set {
+            withMutation(keyPath: \.chorusUploadPrivate) {
+                defaults.set(newValue, forKey: "chorusUploadPrivate")
+            }
+        }
+    }
+
     /// Whether a GIF is exported from the (possibly transcoded) recording via ffmpeg.
     var gifExportEnabled: Bool {
         get {
@@ -892,34 +908,6 @@ final class SettingsStore {
     func resetFFmpeg() {
         ffmpegBookmark = nil
     }
-
-    /// The Chorus.ai API token, backed by the Keychain rather than plaintext UserDefaults
-    /// since it's a secret. Cached in `chorusAPITokenCache` after first read so `access`/
-    /// `withMutation` still drive SwiftUI updates without hitting the Keychain every time.
-    var chorusAPIToken: String? {
-        get {
-            access(keyPath: \.chorusAPITokenCache)
-            if chorusAPITokenCache == nil {
-                chorusAPITokenCache = .some(keychain.readString(key: Self.chorusTokenKeychainKey))
-            }
-            return chorusAPITokenCache ?? nil
-        }
-        set {
-            withMutation(keyPath: \.chorusAPITokenCache) {
-                chorusAPITokenCache = .some(newValue)
-            }
-            if let newValue, !newValue.isEmpty {
-                try? keychain.saveString(newValue, key: Self.chorusTokenKeychainKey)
-            } else {
-                try? keychain.deleteString(key: Self.chorusTokenKeychainKey)
-            }
-        }
-    }
-
-    private static let chorusTokenKeychainKey = "chorusAPIToken"
-
-    /// nil = not yet loaded from the Keychain, `.some(nil)` = loaded and empty.
-    private var chorusAPITokenCache: String??
 
     // MARK: - Private Storage
 

@@ -27,7 +27,7 @@ final class PostProcessingCoordinator {
     private(set) var transcodeState: StepState = .notNeeded
     private(set) var gifExportState: StepState = .notNeeded
     private(set) var uploadState: StepState = .notNeeded
-    private(set) var chorusLink: URL?
+    private(set) var chorusCallID: String?
 
     var isRunning: Bool {
         switch (transcodeState, gifExportState, uploadState) {
@@ -56,18 +56,21 @@ final class PostProcessingCoordinator {
     private let transcodeService: HandBrakeTranscodeService
     private let gifExportService: GIFExportService
     private let uploadService: ChorusUploadService
+    private let chorusSession: ChorusSessionService
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "PostProcessingCoordinator")
     private var currentTask: Task<Void, Never>?
 
     init(
         settings: SettingsStore,
         notificationService: NotificationService,
+        chorusSession: ChorusSessionService,
         transcodeService: HandBrakeTranscodeService = HandBrakeTranscodeService(),
         gifExportService: GIFExportService = GIFExportService(),
         uploadService: ChorusUploadService = ChorusUploadService()
     ) {
         self.settings = settings
         self.notificationService = notificationService
+        self.chorusSession = chorusSession
         self.transcodeService = transcodeService
         self.gifExportService = gifExportService
         self.uploadService = uploadService
@@ -82,7 +85,7 @@ final class PostProcessingCoordinator {
         transcodeState = settings.handBrakeTranscodeEnabled ? .queued : .notNeeded
         gifExportState = settings.gifExportEnabled ? .queued : .notNeeded
         uploadState = settings.chorusUploadEnabled ? .queued : .notNeeded
-        chorusLink = nil
+        chorusCallID = nil
 
         currentTask = Task { [weak self] in
             await self?.run(recordingURL: recordingURL)
@@ -203,8 +206,8 @@ final class PostProcessingCoordinator {
         uploadState = .running(progressText: "Uploading…", fraction: nil)
         notificationService.sendUploadStartedNotification(fileURL: fileURL)
 
-        guard let token = settings.chorusAPIToken, !token.isEmpty else {
-            let error = ChorusUploadError.tokenNotConfigured
+        guard let cookieHeader = chorusSession.cookieHeader, let xsrfToken = chorusSession.xsrfToken else {
+            let error = ChorusUploadError.notSignedIn
             uploadState = .failed(error.localizedDescription)
             notificationService.sendUploadFailedNotification(error: error)
             logger.error("Upload failed: \(error.localizedDescription)")
@@ -212,10 +215,12 @@ final class PostProcessingCoordinator {
         }
 
         do {
-            let result = try await uploadService.upload(fileURL: fileURL, token: token)
-            chorusLink = result.link
+            let result = try await uploadService.upload(
+                fileURL: fileURL, cookieHeader: cookieHeader, xsrfToken: xsrfToken, isPrivate: settings.chorusUploadPrivate
+            )
+            chorusCallID = result.callID
             uploadState = .succeeded
-            notificationService.sendUploadCompletedNotification(link: result.link)
+            notificationService.sendUploadCompletedNotification(link: nil)
         } catch {
             uploadState = .failed(error.localizedDescription)
             notificationService.sendUploadFailedNotification(error: error)

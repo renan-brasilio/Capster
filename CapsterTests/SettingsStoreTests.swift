@@ -473,16 +473,6 @@ struct SettingsStoreTests {
         #expect(store.hasHandBrakeCLI == false)
     }
 
-    @Test func chorusAPITokenRoundTripsThroughKeychainStub() {
-        let store = makeStore()
-        #expect(store.chorusAPIToken == nil)
-
-        store.chorusAPIToken = "test-token-123"
-        #expect(store.chorusAPIToken == "test-token-123")
-
-        store.chorusAPIToken = nil
-        #expect(store.chorusAPIToken == nil)
-    }
 }
 
 /// In-memory `KeychainServing` stub so tests never touch the real Keychain.

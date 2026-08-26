@@ -26,15 +26,15 @@ struct PostProcessingPanelView: View {
                 }
             }
 
-            if let link = coordinator.chorusLink {
-                LabeledContent("Chorus Link") {
+            if let callID = coordinator.chorusCallID {
+                LabeledContent("Chorus Recording ID") {
                     HStack {
-                        Link(link.absoluteString, destination: link)
+                        Text(callID)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Button("Copy") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(link.absoluteString, forType: .string)
+                            NSPasteboard.general.setString(callID, forType: .string)
                         }
                     }
                 }

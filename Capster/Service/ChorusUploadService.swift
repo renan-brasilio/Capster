@@ -7,30 +7,30 @@ import Foundation
 import OSLog
 
 enum ChorusUploadError: LocalizedError {
-    case tokenNotConfigured
+    case notSignedIn
     case requestBuildFailed(Error)
     case networkError(Error)
-    case httpError(statusCode: Int, body: String?)
-    case decodingFailed(Error)
+    case httpError(step: String, statusCode: Int, message: String?)
+    case unexpectedResponse
 
     var errorDescription: String? {
         switch self {
-        case .tokenNotConfigured:
-            return "No Chorus.ai API token is configured. Set it in Settings > Automation."
+        case .notSignedIn:
+            return "Not signed in to Chorus. Sign in from Settings > Automation."
         case .requestBuildFailed(let error):
             return "Failed to build the Chorus upload request: \(error.localizedDescription)"
         case .networkError(let error):
             return "Network error while uploading to Chorus: \(error.localizedDescription)"
-        case .httpError(let statusCode, let body):
-            return "Chorus returned HTTP \(statusCode)\(body.map { ": \($0)" } ?? "")"
-        case .decodingFailed(let error):
-            return "Couldn't parse Chorus's response: \(error.localizedDescription)"
+        case .httpError(let step, let statusCode, let message):
+            return "Chorus (\(step)) returned HTTP \(statusCode)\(message.map { ": \($0)" } ?? "")"
+        case .unexpectedResponse:
+            return "Chorus's upload response didn't include the expected recording ID."
         }
     }
 }
 
 /// Abstracts the network call so tests can stub responses without hitting a real
-/// network or requiring a real Chorus token.
+/// network or requiring a real Chorus session.
 protocol HTTPUploading {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
 }
@@ -38,59 +38,46 @@ protocol HTTPUploading {
 extension URLSession: HTTPUploading {}
 
 struct ChorusUploadResult {
-    /// The shareable Chorus link to show/copy, if the (guessed) response included one.
-    let link: URL?
-    /// Chorus's own call identifier, if present.
-    let callID: String?
+    /// Chorus's identifier for the created recording.
+    let callID: String
 }
 
-// MARK: - ⚠️ UNVERIFIED API CONTRACT ⚠️
+// MARK: - Request contract, captured 2026-08-26 from a real Chorus account via the
+// browser's DevTools Network tab while using the "Import a Recording" feature under
+// Chorus > Settings > Personal Settings. This is Chorus's own internal web-app
+// endpoint, not the documented public REST API (`api-docs.chorus.ai`) - used because
+// most users don't have the role permission needed to generate an API token for that
+// one. Auth is the session `Cookie` header plus an `X-Xsrftoken` header, both captured
+// by `ChorusLoginView`'s embedded login flow and held by `ChorusSessionService`.
+// `X-Xsrftoken` is just the value of the `_xsrf` cookie echoed back as a header - a
+// standard double-submit CSRF pattern (Tornado's default cookie name, suggesting
+// Chorus's backend is Tornado-based).
 //
-// Chorus.ai's public upload endpoint could not be confirmed against real docs or a real
-// token as of 2026-08-19 (api-docs.chorus.ai is JS-rendered and inaccessible in this
-// environment). Everything below this line is a best-guess REST contract:
-// `POST {baseURL}/upload` with `Authorization: Bearer <token>` and a multipart/form-data
-// body containing the recording file. Replace `ChorusUploadRequestBuilder` and
-// `ChorusUploadResponse` together, in this one place, once verified against a real
-// token/response - nothing else in `ChorusUploadService` should need to change unless a
-// new failure mode shows up (in which case add a `ChorusUploadError` case for it).
+// Three sequential calls, confirmed against real responses:
+//   1. POST /api/recording/upload/          multipart, field "file"
+//        -> {"callid": "...", "account_id": null, "success": true}
+//   2. PATCH /api/recording/access/{callid}  JSON {"is_private": <bool>}
+//   3. POST /api/recording/v2                form-urlencoded:
+//        callid=<callid>&ext_id=&ext_name=&ext_type=
+//      (CRM/meeting association fields - left blank since Capster has no CRM context
+//      to offer; Chorus pre-fills these from other signals when a real user does it
+//      through the UI.)
+//
+// Unlike the documented API, no response ever exposes a viewable link for the
+// recording, so `ChorusUploadResult` only carries the call ID.
 
-private enum ChorusUploadRequestBuilder {
-    static let baseURL = URL(string: "https://api.chorus.ai/v1")!
-    static let uploadPath = "/upload"
+private enum ChorusEndpoint {
+    static let upload = URL(string: "https://chorus.ai/api/recording/upload/")!
+    static let v2 = URL(string: "https://chorus.ai/api/recording/v2")!
 
-    static func buildRequest(fileURL: URL, token: String) throws -> URLRequest {
-        let fileData = try Data(contentsOf: fileURL)
-
-        var request = URLRequest(url: baseURL.appending(path: uploadPath))
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-        let boundary = "Boundary-\(UUID().uuidString)"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = buildMultipartBody(fileURL: fileURL, fileData: fileData, boundary: boundary)
-        return request
-    }
-
-    private static func buildMultipartBody(fileURL: URL, fileData: Data, boundary: String) -> Data {
-        var body = Data()
-        func append(_ string: String) {
-            body.append(string.data(using: .utf8) ?? Data())
-        }
-
-        append("--\(boundary)\r\n")
-        append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileURL.lastPathComponent)\"\r\n")
-        append("Content-Type: application/octet-stream\r\n\r\n")
-        body.append(fileData)
-        append("\r\n--\(boundary)--\r\n")
-        return body
+    static func access(callID: String) -> URL {
+        URL(string: "https://chorus.ai/api/recording/access/\(callID)")!
     }
 }
 
-/// GUESS at Chorus's JSON response shape for a successful upload.
 private struct ChorusUploadResponse: Decodable {
-    let callId: String?
-    let url: String?
+    let callid: String
+    let success: Bool
 }
 
 final class ChorusUploadService {
@@ -101,37 +88,126 @@ final class ChorusUploadService {
         self.session = session
     }
 
-    func upload(fileURL: URL, token: String) async throws -> ChorusUploadResult {
-        guard !token.isEmpty else { throw ChorusUploadError.tokenNotConfigured }
+    func upload(fileURL: URL, cookieHeader: String, xsrfToken: String, isPrivate: Bool) async throws -> ChorusUploadResult {
+        guard !cookieHeader.isEmpty, !xsrfToken.isEmpty else { throw ChorusUploadError.notSignedIn }
 
-        let request: URLRequest
+        let callID = try await uploadFile(fileURL: fileURL, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
+        // Privacy is set last, after association - if associating with a record pulls in
+        // that record's own default sharing, doing it first would clobber an explicit
+        // privacy choice made here.
+        try await associate(callID: callID, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
+        try await setPrivacy(callID: callID, isPrivate: isPrivate, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
+
+        logger.info("Chorus upload succeeded, callid: \(callID)")
+        return ChorusUploadResult(callID: callID)
+    }
+
+    // MARK: - Steps
+
+    private func uploadFile(fileURL: URL, cookieHeader: String, xsrfToken: String) async throws -> String {
+        let fileData: Data
         do {
-            request = try ChorusUploadRequestBuilder.buildRequest(fileURL: fileURL, token: token)
+            fileData = try Data(contentsOf: fileURL)
         } catch {
             throw ChorusUploadError.requestBuildFailed(error)
         }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw ChorusUploadError.networkError(error)
-        }
+        var request = URLRequest(url: ChorusEndpoint.upload)
+        request.httpMethod = "POST"
+        applyAuthHeaders(cookieHeader: cookieHeader, xsrfToken: xsrfToken, to: &request)
 
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        func append(_ string: String) { body.append(string.data(using: .utf8) ?? Data()) }
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileURL.lastPathComponent)\"\r\n")
+        append("Content-Type: application/octet-stream\r\n\r\n")
+        body.append(fileData)
+        append("\r\n--\(boundary)--\r\n")
+        request.httpBody = body
+
+        let data = try await performExpectingSuccess(request, step: "upload")
+        guard let decoded = try? JSONDecoder().decode(ChorusUploadResponse.self, from: data), decoded.success else {
+            throw ChorusUploadError.unexpectedResponse
+        }
+        return decoded.callid
+    }
+
+    private func setPrivacy(callID: String, isPrivate: Bool, cookieHeader: String, xsrfToken: String) async throws {
+        var request = URLRequest(url: ChorusEndpoint.access(callID: callID))
+        request.httpMethod = "PATCH"
+        applyAuthHeaders(cookieHeader: cookieHeader, xsrfToken: xsrfToken, to: &request)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["is_private": isPrivate])
+
+        let data = try await performExpectingSuccess(request, step: "access", retryOn404Count: 4)
+        logger.info("Chorus access step response: \(String(data: data, encoding: .utf8) ?? "<empty>", privacy: .public)")
+    }
+
+    private func associate(callID: String, cookieHeader: String, xsrfToken: String) async throws {
+        var request = URLRequest(url: ChorusEndpoint.v2)
+        request.httpMethod = "POST"
+        applyAuthHeaders(cookieHeader: cookieHeader, xsrfToken: xsrfToken, to: &request)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "callid", value: callID),
+            URLQueryItem(name: "ext_id", value: ""),
+            URLQueryItem(name: "ext_name", value: ""),
+            URLQueryItem(name: "ext_type", value: "")
+        ]
+        request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+
+        _ = try await performExpectingSuccess(request, step: "associate", retryOn404Count: 4)
+    }
+
+    // MARK: - Helpers
+
+    /// Beyond the session itself, matches header fields observed on the real browser
+    /// request that our request otherwise omits - `X-Al-Version` in particular looks
+    /// like a version-routing header, and its absence could plausibly cause a literal
+    /// 404 (no matching route) rather than a 401/403 if Chorus's gateway routes on it.
+    private func applyAuthHeaders(cookieHeader: String, xsrfToken: String, to request: inout URLRequest) {
+        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        request.setValue(xsrfToken, forHTTPHeaderField: "X-Xsrftoken")
+        request.setValue("https://chorus.ai", forHTTPHeaderField: "Origin")
+        request.setValue("https://chorus.ai/settings/personal-settings", forHTTPHeaderField: "Referer")
+        request.setValue("2019-09-01", forHTTPHeaderField: "X-Al-Version")
+    }
+
+    /// `retryOn404Count` retries a 404 with backoff before giving up - Chorus's backend
+    /// appears to need a moment after `/upload/` responds before the new `callid` is
+    /// queryable by the follow-up calls, which instantly 404 otherwise. The initial
+    /// upload step itself doesn't have this issue, so it passes 0 (no retry).
+    private func performExpectingSuccess(_ request: URLRequest, step: String, retryOn404Count: Int = 0) async throws -> Data {
+        var attempt = 0
+
+        while true {
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw ChorusUploadError.networkError(error)
+            }
+
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw ChorusUploadError.httpError(statusCode: statusCode, body: String(data: data, encoding: .utf8))
-        }
+            if (200..<300).contains(statusCode) {
+                return data
+            }
 
-        let decoded: ChorusUploadResponse
-        do {
-            decoded = try JSONDecoder().decode(ChorusUploadResponse.self, from: data)
-        } catch {
-            throw ChorusUploadError.decodingFailed(error)
-        }
+            if statusCode == 404, attempt < retryOn404Count {
+                attempt += 1
+                logger.info("Chorus \(step, privacy: .public) 404'd, retrying (\(attempt)/\(retryOn404Count)) - likely still processing the upload")
+                try? await Task.sleep(for: .seconds(Double(attempt)))
+                continue
+            }
 
-        logger.info("Chorus upload succeeded")
-        return ChorusUploadResult(link: decoded.url.flatMap(URL.init(string:)), callID: decoded.callId)
+            logger.error("Chorus \(step, privacy: .public) failed: HTTP \(statusCode) at \(request.url?.absoluteString ?? "?", privacy: .public)")
+            throw ChorusUploadError.httpError(step: step, statusCode: statusCode, message: String(data: data, encoding: .utf8))
+        }
     }
 }

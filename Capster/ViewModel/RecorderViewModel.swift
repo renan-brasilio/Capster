@@ -95,6 +95,7 @@ final class RecorderViewModel {
     let previewService: PreviewService
     let notificationService: NotificationService
     let permissionService: PermissionService
+    let chorusSession: ChorusSessionService
     let postProcessing: PostProcessingCoordinator
     private let captureEngine: CaptureEngine
     private let assetWriter: AssetWriter
@@ -124,7 +125,8 @@ final class RecorderViewModel {
         self.previewService = PreviewService()
         self.notificationService = NotificationService(settings: settings)
         self.permissionService = PermissionService()
-        self.postProcessing = PostProcessingCoordinator(settings: settings, notificationService: notificationService)
+        self.chorusSession = ChorusSessionService()
+        self.postProcessing = PostProcessingCoordinator(settings: settings, notificationService: notificationService, chorusSession: chorusSession)
         self.captureEngine = CaptureEngine()
         self.assetWriter = AssetWriter()
 

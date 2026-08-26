@@ -14,6 +14,7 @@ struct SettingsView: View {
     @Bindable var settings: SettingsStore
     var updaterService: UpdaterService
     var permissionService: PermissionService
+    var chorusSession: ChorusSessionService
 
     var body: some View {
         TabView {
@@ -34,7 +35,7 @@ struct SettingsView: View {
             }
 
             Tab("Automation", systemImage: "wand.and.stars") {
-                AutomationSettingsView(settings: settings)
+                AutomationSettingsView(settings: settings, chorusSession: chorusSession)
             }
         }
         .frame(width: 500, height: 420)
@@ -303,8 +304,9 @@ struct MicrophonePermissionRow: View {
 
 struct AutomationSettingsView: View {
     @Bindable var settings: SettingsStore
+    var chorusSession: ChorusSessionService
 
-    @State private var tokenDraft: String = ""
+    @State private var loginWindow = ChorusLoginWindowCoordinator()
     @State private var isInstallingHandBrake = false
     @State private var installStatusText: String?
     @State private var installErrorText: String?
@@ -428,22 +430,33 @@ struct AutomationSettingsView: View {
             Section("Chorus.ai Upload") {
                 Toggle("Upload After Recording", isOn: $settings.chorusUploadEnabled)
 
-                SecureField("API Token", text: $tokenDraft)
+                Toggle("Private (Visible Only to Me)", isOn: $settings.chorusUploadPrivate)
                     .disabled(!settings.chorusUploadEnabled)
-                    .onChange(of: tokenDraft) { _, newValue in
-                        settings.chorusAPIToken = newValue
-                    }
+                    .help("Private recordings in Chorus are only visible to you and limit certain features. Turn off to make uploads visible to your team.")
 
-                Text("Chorus.ai's upload API contract is unverified against a real account - if uploads fail immediately, this is the first place to check.")
+                LabeledContent("Chorus Account") {
+                    HStack {
+                        Text(chorusSession.isSignedIn ? "Signed in" : "Not signed in")
+                            .foregroundStyle(.secondary)
+                        Button(chorusSession.isSignedIn ? "Sign In Again" : "Sign In") {
+                            loginWindow.show(sessionService: chorusSession)
+                        }
+                        if chorusSession.isSignedIn {
+                            Button("Sign Out", role: .destructive) {
+                                chorusSession.signOut()
+                            }
+                        }
+                    }
+                }
+                .disabled(!settings.chorusUploadEnabled)
+
+                Text("Uploads via the same request Chorus's own \"Import a Recording\" feature uses (Chorus > Settings > Personal Settings), since most accounts don't have API token access. Sign-in opens an embedded Chorus login page - your credentials go directly to Chorus, not through Capster.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .padding()
-        .task {
-            tokenDraft = settings.chorusAPIToken ?? ""
-        }
     }
 
     /// Opens an NSOpenPanel to select the HandBrakeCLI executable
@@ -668,5 +681,5 @@ struct AboutSection: View {
 // MARK: - Preview
 
 #Preview {
-    SettingsView(settings: SettingsStore(), updaterService: UpdaterService(), permissionService: PermissionService())
+    SettingsView(settings: SettingsStore(), updaterService: UpdaterService(), permissionService: PermissionService(), chorusSession: ChorusSessionService())
 }

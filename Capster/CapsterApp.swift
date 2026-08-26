@@ -38,7 +38,8 @@ struct CapsterApp: App {
             SettingsView(
                 settings: viewModel.settings,
                 updaterService: updaterService,
-                permissionService: viewModel.permissionService
+                permissionService: viewModel.permissionService,
+                chorusSession: viewModel.chorusSession
             )
         }
     }
