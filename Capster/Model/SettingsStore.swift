@@ -758,6 +758,19 @@ final class SettingsStore {
         }
     }
 
+    /// Whether a GIF is exported from the (possibly transcoded) recording via ffmpeg.
+    var gifExportEnabled: Bool {
+        get {
+            access(keyPath: \.gifExportEnabled)
+            return defaults.bool(forKey: "gifExportEnabled")
+        }
+        set {
+            withMutation(keyPath: \.gifExportEnabled) {
+                defaults.set(newValue, forKey: "gifExportEnabled")
+            }
+        }
+    }
+
     /// Security-scoped bookmark data for the user-located HandBrakeCLI executable.
     private var handBrakeCLIBookmark: Data? {
         get {
@@ -817,6 +830,67 @@ final class SettingsStore {
     /// Clears the located HandBrakeCLI binary.
     func resetHandBrakeCLI() {
         handBrakeCLIBookmark = nil
+    }
+
+    /// Security-scoped bookmark data for the user-located ffmpeg executable.
+    private var ffmpegBookmark: Data? {
+        get {
+            access(keyPath: \.ffmpegBookmark)
+            return defaults.data(forKey: "ffmpegBookmark")
+        }
+        set {
+            withMutation(keyPath: \.ffmpegBookmark) {
+                defaults.set(newValue, forKey: "ffmpegBookmark")
+            }
+        }
+    }
+
+    /// Whether the user has located an ffmpeg binary.
+    var hasFFmpegCLI: Bool { ffmpegBookmark != nil }
+
+    /// Resolves the ffmpeg bookmark to a URL, refreshing it if stale. Returns nil if never
+    /// set, or if resolution fails (e.g. the binary was moved or deleted without
+    /// re-selecting it in Settings).
+    var ffmpegURL: URL? {
+        guard let bookmarkData = ffmpegBookmark else { return nil }
+
+        do {
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+
+            if isStale, let refreshed = try? url.bookmarkData(
+                options: [],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            ) {
+                ffmpegBookmark = refreshed
+            }
+
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// Sets the ffmpeg binary location from a user-selected URL (NSOpenPanel result).
+    func setFFmpegURL(_ url: URL) {
+        guard let bookmarkData = try? url.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) else { return }
+
+        ffmpegBookmark = bookmarkData
+    }
+
+    /// Clears the located ffmpeg binary.
+    func resetFFmpeg() {
+        ffmpegBookmark = nil
     }
 
     /// The Chorus.ai API token, backed by the Keychain rather than plaintext UserDefaults

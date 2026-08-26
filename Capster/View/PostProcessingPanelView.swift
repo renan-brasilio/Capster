@@ -18,6 +18,9 @@ struct PostProcessingPanelView: View {
                 if coordinator.transcodeState != .notNeeded {
                     StepRow(title: "Transcode", state: coordinator.transcodeState)
                 }
+                if coordinator.gifExportState != .notNeeded {
+                    StepRow(title: "Export GIF", state: coordinator.gifExportState)
+                }
                 if coordinator.uploadState != .notNeeded {
                     StepRow(title: "Upload to Chorus", state: coordinator.uploadState)
                 }

@@ -94,6 +94,10 @@ struct MenuBarView: View {
                 .padding(.top, 8)
             }
 
+            if isRecording && viewModel.settings.captureMicrophone {
+                MicrophoneLevelRow(level: viewModel.microphoneLevel)
+            }
+
             MenuBarDivider()
 
             // Content Selection
@@ -281,6 +285,43 @@ struct RecordingButton: View {
         .onHover { hovering in
             isHovered = hovering
         }
+    }
+}
+
+// MARK: - Microphone Level Meter
+
+/// A small live level meter shown while recording with the microphone enabled, so the
+/// user can confirm audio is actually coming through instead of just hoping.
+struct MicrophoneLevelRow: View {
+    /// Peak amplitude, 0...1.
+    let level: Float
+
+    private var color: Color {
+        if level > 0.85 { return .red }
+        if level > 0.6 { return .yellow }
+        return .green
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.gray.opacity(0.2))
+                    Capsule()
+                        .fill(color)
+                        .frame(width: geometry.size.width * CGFloat(min(max(level, 0), 1)))
+                }
+            }
+            .frame(height: 4)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .animation(.linear(duration: 0.1), value: level)
     }
 }
 

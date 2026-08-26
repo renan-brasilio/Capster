@@ -8,7 +8,6 @@ import OSLog
 
 enum HandBrakeTranscodeError: LocalizedError {
     case binaryNotConfigured
-    case processLaunchFailed(Error)
     case nonZeroExit(Int32, stderrTail: String)
     case outputFileMissing
 
@@ -16,12 +15,25 @@ enum HandBrakeTranscodeError: LocalizedError {
         switch self {
         case .binaryNotConfigured:
             return "HandBrakeCLI has not been located. Set it in Settings > Automation."
-        case .processLaunchFailed(let error):
-            return "Failed to launch HandBrakeCLI: \(error.localizedDescription)"
         case .nonZeroExit(let code, let stderrTail):
             return "HandBrakeCLI exited with code \(code): \(stderrTail)"
         case .outputFileMissing:
             return "HandBrakeCLI finished but no output file was produced."
+        }
+    }
+}
+
+/// Thrown by `ProcessRunning` implementations when the child process itself couldn't be
+/// launched (e.g. the binary was deleted or lost its executable bit between being
+/// located and being run). Generic rather than tool-specific since `SystemProcessRunner`
+/// is shared across every CLI Capster shells out to.
+enum ProcessLaunchError: LocalizedError {
+    case launchFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .launchFailed(let error):
+            return "Failed to launch process: \(error.localizedDescription)"
         }
     }
 }
@@ -74,7 +86,7 @@ final class SystemProcessRunner: ProcessRunning {
             try process.run()
         } catch {
             pipe.fileHandleForReading.readabilityHandler = nil
-            throw HandBrakeTranscodeError.processLaunchFailed(error)
+            throw ProcessLaunchError.launchFailed(error)
         }
 
         return await withTaskCancellationHandler {

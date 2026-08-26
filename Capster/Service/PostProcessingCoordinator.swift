@@ -25,12 +25,15 @@ final class PostProcessingCoordinator {
     }
 
     private(set) var transcodeState: StepState = .notNeeded
+    private(set) var gifExportState: StepState = .notNeeded
     private(set) var uploadState: StepState = .notNeeded
     private(set) var chorusLink: URL?
 
     var isRunning: Bool {
-        switch (transcodeState, uploadState) {
-        case (.queued, _), (.running, _), (_, .queued), (_, .running):
+        switch (transcodeState, gifExportState, uploadState) {
+        case (.queued, _, _), (.running, _, _),
+            (_, .queued, _), (_, .running, _),
+            (_, _, .queued), (_, _, .running):
             return true
         default:
             return false
@@ -38,18 +41,20 @@ final class PostProcessingCoordinator {
     }
 
     var isFinished: Bool {
-        !isRunning && (transcodeState != .notNeeded || uploadState != .notNeeded)
+        !isRunning && (transcodeState != .notNeeded || gifExportState != .notNeeded || uploadState != .notNeeded)
     }
 
     var didSucceed: Bool {
         isFinished
             && !isCase(transcodeState, .failed(""))
+            && !isCase(gifExportState, .failed(""))
             && !isCase(uploadState, .failed(""))
     }
 
     private let settings: SettingsStore
     private let notificationService: NotificationService
     private let transcodeService: HandBrakeTranscodeService
+    private let gifExportService: GIFExportService
     private let uploadService: ChorusUploadService
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "PostProcessingCoordinator")
     private var currentTask: Task<Void, Never>?
@@ -58,21 +63,24 @@ final class PostProcessingCoordinator {
         settings: SettingsStore,
         notificationService: NotificationService,
         transcodeService: HandBrakeTranscodeService = HandBrakeTranscodeService(),
+        gifExportService: GIFExportService = GIFExportService(),
         uploadService: ChorusUploadService = ChorusUploadService()
     ) {
         self.settings = settings
         self.notificationService = notificationService
         self.transcodeService = transcodeService
+        self.gifExportService = gifExportService
         self.uploadService = uploadService
     }
 
-    /// Starts the pipeline for a just-finished recording. No-ops if neither automation
-    /// is enabled. Returns immediately; the pipeline runs in an internal `Task`.
+    /// Starts the pipeline for a just-finished recording. No-ops if no automation is
+    /// enabled. Returns immediately; the pipeline runs in an internal `Task`.
     func start(recordingURL: URL) {
-        guard settings.handBrakeTranscodeEnabled || settings.chorusUploadEnabled else { return }
+        guard settings.handBrakeTranscodeEnabled || settings.gifExportEnabled || settings.chorusUploadEnabled else { return }
 
         currentTask?.cancel()
         transcodeState = settings.handBrakeTranscodeEnabled ? .queued : .notNeeded
+        gifExportState = settings.gifExportEnabled ? .queued : .notNeeded
         uploadState = settings.chorusUploadEnabled ? .queued : .notNeeded
         chorusLink = nil
 
@@ -99,6 +107,12 @@ final class PostProcessingCoordinator {
 
         if settings.handBrakeTranscodeEnabled {
             workingURL = await runTranscode(inputURL: workingURL)
+        }
+
+        if Task.isCancelled { return }
+
+        if settings.gifExportEnabled {
+            await runGIFExport(inputURL: workingURL)
         }
 
         if Task.isCancelled { return }
@@ -150,6 +164,38 @@ final class PostProcessingCoordinator {
             notificationService.sendTranscodeFailedNotification(error: error)
             logger.error("Transcode failed: \(error.localizedDescription)")
             return inputURL
+        }
+    }
+
+    /// Runs the GIF export step. Failure doesn't affect `workingURL` - a GIF is an extra
+    /// artifact alongside the recording, not a replacement for it.
+    private func runGIFExport(inputURL: URL) async {
+        gifExportState = .running(progressText: "Starting…", fraction: 0)
+        notificationService.sendGIFExportStartedNotification(fileURL: inputURL)
+
+        guard let binaryURL = settings.ffmpegURL else {
+            let error = GIFExportError.binaryNotConfigured
+            gifExportState = .failed(error.localizedDescription)
+            notificationService.sendGIFExportFailedNotification(error: error)
+            logger.error("GIF export failed: \(error.localizedDescription)")
+            return
+        }
+
+        do {
+            let gifURL = try await gifExportService.export(
+                inputURL: inputURL,
+                binaryURL: binaryURL
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.gifExportState = .running(progressText: progress.statusText, fraction: progress.fractionComplete)
+                }
+            }
+            gifExportState = .succeeded
+            notificationService.sendGIFExportCompletedNotification(fileURL: gifURL)
+        } catch {
+            gifExportState = .failed(error.localizedDescription)
+            notificationService.sendGIFExportFailedNotification(error: error)
+            logger.error("GIF export failed: \(error.localizedDescription)")
         }
     }
 

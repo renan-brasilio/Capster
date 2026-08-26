@@ -29,6 +29,12 @@ final class AssetWriter: CaptureEngineSampleBufferDelegate, @unchecked Sendable 
     private let audioMixer = AudioMixer()
     private var isMixingAudio = false
 
+    /// Most recent microphone peak level (0...1), for a live meter in the UI. Updated on
+    /// whichever queue `CaptureEngine` delivers microphone buffers on, so it's guarded by
+    /// its own lock rather than piggybacking on the heavier writer-state lock below.
+    private let microphoneLevelLock = OSAllocatedUnfairLock<Float>(initialState: 0)
+    var microphoneLevel: Float { microphoneLevelLock.withLock { $0 } }
+
     private(set) var isWriting = false
     private(set) var outputURL: URL?
 
@@ -759,6 +765,10 @@ extension AssetWriter {
     func captureEngine(
         _ engine: CaptureEngine, didOutputMicrophoneSampleBuffer sampleBuffer: CMSampleBuffer
     ) {
+        if let level = AudioLevelMeter.peakLevel(from: sampleBuffer) {
+            microphoneLevelLock.withLock { $0 = level }
+        }
+
         if isMixingAudio {
             audioMixer.mixMicrophone(sampleBuffer)
         } else {

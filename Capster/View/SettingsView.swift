@@ -309,8 +309,16 @@ struct AutomationSettingsView: View {
     @State private var installStatusText: String?
     @State private var installErrorText: String?
 
+    @State private var isInstallingFFmpeg = false
+    @State private var ffmpegInstallStatusText: String?
+    @State private var ffmpegInstallErrorText: String?
+
     private var handBrakeCLIPath: String? {
         settings.handBrakeCLIURL?.path(percentEncoded: false)
+    }
+
+    private var ffmpegPath: String? {
+        settings.ffmpegURL?.path(percentEncoded: false)
     }
 
     var body: some View {
@@ -366,6 +374,52 @@ struct AutomationSettingsView: View {
                         .truncationMode(.middle)
                 } else {
                     Text("HandBrakeCLI not located. Install it via Homebrew above, or install it yourself (e.g. \"brew install handbrake\") and select the binary.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("GIF Export") {
+                Toggle("Export GIF After Recording", isOn: $settings.gifExportEnabled)
+                    .help("Exports an animated GIF alongside the recording using ffmpeg.")
+
+                LabeledContent("ffmpeg") {
+                    HStack {
+                        Button("Locate ffmpeg…") {
+                            locateFFmpeg()
+                        }
+                        if !settings.hasFFmpegCLI {
+                            Button(isInstallingFFmpeg ? "Installing…" : "Install via Homebrew") {
+                                installFFmpeg()
+                            }
+                            .disabled(isInstallingFFmpeg)
+                        }
+                        if settings.hasFFmpegCLI {
+                            Button("Reset", role: .destructive) {
+                                settings.resetFFmpeg()
+                            }
+                        }
+                    }
+                }
+
+                if isInstallingFFmpeg {
+                    Text(ffmpegInstallStatusText ?? "Starting…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else if let ffmpegInstallErrorText {
+                    Text(ffmpegInstallErrorText)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else if let ffmpegPath {
+                    Text(ffmpegPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("ffmpeg not located. Install it via Homebrew above, or install it yourself (e.g. \"brew install ffmpeg\") and select the binary.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -428,6 +482,46 @@ struct AutomationSettingsView: View {
                 isInstallingHandBrake = false
                 installStatusText = nil
                 installErrorText = error.localizedDescription
+            }
+        }
+    }
+
+    /// Opens an NSOpenPanel to select the ffmpeg executable
+    private func locateFFmpeg() {
+        let panel = NSOpenPanel()
+        panel.title = "Locate ffmpeg"
+        panel.message = "Select the ffmpeg executable (commonly installed via Homebrew at /opt/homebrew/bin/ffmpeg or /usr/local/bin/ffmpeg)"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(filePath: "/opt/homebrew/bin")
+        panel.treatsFilePackagesAsDirectories = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            settings.setFFmpegURL(url)
+        }
+    }
+
+    /// Runs `brew install ffmpeg` and locates it automatically afterward, so first-time
+    /// setup doesn't require leaving Capster for Terminal.
+    private func installFFmpeg() {
+        isInstallingFFmpeg = true
+        ffmpegInstallErrorText = nil
+        ffmpegInstallStatusText = "Starting…"
+
+        Task {
+            let installer = FFmpegInstallerService()
+            do {
+                let url = try await installer.install { line in
+                    Task { @MainActor in ffmpegInstallStatusText = line }
+                }
+                settings.setFFmpegURL(url)
+                isInstallingFFmpeg = false
+                ffmpegInstallStatusText = nil
+            } catch {
+                isInstallingFFmpeg = false
+                ffmpegInstallStatusText = nil
+                ffmpegInstallErrorText = error.localizedDescription
             }
         }
     }

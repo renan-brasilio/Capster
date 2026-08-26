@@ -30,6 +30,12 @@ final class RecorderViewModel {
     private(set) var lastError: Error?
     private(set) var selectedContentFilter: SCContentFilter?
 
+    /// Live microphone peak level (0...1) for the menu bar meter, polled from
+    /// `AssetWriter` while capture is active - including during the countdown/Presenter
+    /// Overlay wait, so the user can confirm the mic is picking anything up before the
+    /// recording proper begins.
+    private(set) var microphoneLevel: Float = 0
+
     /// The source rectangle for area selection (in display points, top-left origin)
     private(set) var selectedSourceRect: CGRect?
 
@@ -100,6 +106,7 @@ final class RecorderViewModel {
     // MARK: - Private Properties
 
     private var recordingTimer: Timer?
+    private var levelMeterTimer: Timer?
     private var recordingStartTime: Date?
     private var pauseStartDate: Date?
     private var videoSize: CGSize = .zero
@@ -317,8 +324,9 @@ final class RecorderViewModel {
                 selectionBorderFrame.show(screenRect: screenRect)
             }
 
-            // Start timer
+            // Start timers
             startTimer()
+            startLevelMeterTimer()
 
             // The screen-sharing menu bar icon only offers Presenter Overlay once a share
             // is genuinely live, so this has to wait until capture has actually started -
@@ -358,6 +366,7 @@ final class RecorderViewModel {
             lastError = error
             cameraSession.stop()
             selectionBorderFrame.dismiss()
+            stopLevelMeterTimer()
 
             // The writer may already be set up and holding an empty output file. Cancel it
             // before releasing the output directory, since that is where the file lives.
@@ -390,6 +399,7 @@ final class RecorderViewModel {
         countdownOverlay.cancel()
         isPreparing = false
         stopTimer()
+        stopLevelMeterTimer()
         selectionBorderFrame.dismiss()
 
         do {
@@ -427,7 +437,7 @@ final class RecorderViewModel {
                 copyFileToClipboard(outputURL)
             }
 
-            if settings.handBrakeTranscodeEnabled || settings.chorusUploadEnabled {
+            if settings.handBrakeTranscodeEnabled || settings.gifExportEnabled || settings.chorusUploadEnabled {
                 postProcessing.start(recordingURL: outputURL)
                 postProcessingPanel.show(coordinator: postProcessing)
             }
@@ -456,6 +466,7 @@ final class RecorderViewModel {
         countdownOverlay.cancel()
         isPreparing = false
         stopTimer()
+        stopLevelMeterTimer()
         selectionBorderFrame.dismiss()
 
         do {
@@ -566,6 +577,24 @@ final class RecorderViewModel {
         recordingTimer = nil
         recordingStartTime = nil
         pauseStartDate = nil
+    }
+
+    /// Polls `AssetWriter`'s microphone level a few times a second for the menu bar meter.
+    /// A dedicated timer rather than piggybacking on the once-a-second duration timer,
+    /// since a meter needs to look live.
+    private func startLevelMeterTimer() {
+        levelMeterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.microphoneLevel = self.assetWriter.microphoneLevel
+            }
+        }
+    }
+
+    private func stopLevelMeterTimer() {
+        levelMeterTimer?.invalidate()
+        levelMeterTimer = nil
+        microphoneLevel = 0
     }
 
     // MARK: - Helper Methods

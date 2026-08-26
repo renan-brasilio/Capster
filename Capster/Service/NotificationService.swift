@@ -215,6 +215,31 @@ final class NotificationService: NSObject {
         )
     }
 
+    func sendGIFExportStartedNotification(fileURL: URL) {
+        send(
+            title: "Exporting GIF",
+            body: "Exporting \(fileURL.lastPathComponent) as a GIF…",
+            category: NotificationIdentifier.categoryPostProcessing
+        )
+    }
+
+    func sendGIFExportCompletedNotification(fileURL: URL) {
+        send(
+            title: "GIF Export Complete",
+            body: "\(fileURL.lastPathComponent) is ready",
+            category: NotificationIdentifier.categoryPostProcessing,
+            folderURL: fileURL.deletingLastPathComponent()
+        )
+    }
+
+    func sendGIFExportFailedNotification(error: Error) {
+        send(
+            title: "GIF Export Failed",
+            body: error.localizedDescription,
+            category: NotificationIdentifier.categoryPostProcessingFailed
+        )
+    }
+
     func sendUploadStartedNotification(fileURL: URL) {
         send(
             title: "Uploading to Chorus",
