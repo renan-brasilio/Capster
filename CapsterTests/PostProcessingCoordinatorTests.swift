@@ -149,9 +149,11 @@ struct PostProcessingCoordinatorTests {
         )
 
         let input = recordingURL()
-        coordinator.start(recordingURL: input)
+        coordinator.start(recordingURL: input, formattedDuration: "1:23")
 
         while coordinator.renamePrompt == nil { await Task.yield() }
+        #expect(coordinator.renamePrompt?.formattedDuration == "1:23")
+        #expect(coordinator.renamePrompt?.destinationDirectory == input.deletingLastPathComponent())
         coordinator.submitRename("Client Demo")
         await coordinator.waitUntilFinished()
 
@@ -161,6 +163,49 @@ struct PostProcessingCoordinatorTests {
         let renamedURL = input.deletingLastPathComponent().appending(path: "Client Demo.mp4")
         defer { try? FileManager.default.removeItem(at: renamedURL) }
         #expect(FileManager.default.fileExists(atPath: renamedURL.path(percentEncoded: false)) == true)
+    }
+
+    /// The rename happens before transcoding starts, so the same new name should carry
+    /// through to the transcoded output too - not just the file that gets uploaded.
+    @Test func renameAppliesBeforeTranscodeSoTheTranscodedFileSharesTheNewName() async throws {
+        let settings = makeSettings()
+        settings.handBrakeTranscodeEnabled = true
+        settings.chorusUploadEnabled = true
+        settings.chorusRenameBeforeUploadEnabled = true
+
+        let dummyBinary = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString)-HandBrakeCLI")
+        FileManager.default.createFile(atPath: dummyBinary.path(percentEncoded: false), contents: Data())
+        defer { try? FileManager.default.removeItem(at: dummyBinary) }
+        settings.setHandBrakeCLIURL(dummyBinary)
+
+        let newName = "Transcode Rename Test \(UUID().uuidString)"
+        let input = recordingURL()
+        let renamedInput = input.deletingLastPathComponent().appending(path: "\(newName).mp4")
+        let expectedOutput = HandBrakeTranscodeService.outputURL(for: renamedInput)
+        defer { try? FileManager.default.removeItem(at: expectedOutput) }
+
+        var receivedFileURL: URL?
+        let uploadStub = RecordingUploadStub { url in receivedFileURL = url }
+        let uploadService = ChorusUploadService(session: uploadStub)
+        let transcodeService = HandBrakeTranscodeService(processRunner: SucceedingTranscodeRunner(outputURL: expectedOutput))
+        let notifications = NotificationService(settings: settings)
+        let coordinator = PostProcessingCoordinator(
+            settings: settings,
+            notificationService: notifications,
+            chorusSession: makeSignedInChorusSession(),
+            transcodeService: transcodeService,
+            uploadService: uploadService
+        )
+
+        coordinator.start(recordingURL: input)
+
+        while coordinator.renamePrompt == nil { await Task.yield() }
+        coordinator.submitRename(newName)
+        await coordinator.waitUntilFinished()
+
+        #expect(coordinator.transcodeState == .succeeded)
+        #expect(FileManager.default.fileExists(atPath: expectedOutput.path(percentEncoded: false)) == true)
+        #expect(receivedFileURL?.lastPathComponent == "\(newName) (Transcoded).mp4")
     }
 
     @Test func skippingTheRenamePromptUploadsUnderTheOriginalName() async throws {

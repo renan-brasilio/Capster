@@ -23,7 +23,7 @@ struct SettingsView: View {
             }
 
             Tab("Video", systemImage: "video") {
-                VideoSettingsView(settings: settings)
+                VideoSettingsView(settings: settings, permissionService: permissionService)
             }
 
             Tab("Audio", systemImage: "waveform") {
@@ -71,6 +71,7 @@ struct ShortcutsSettingsView: View {
 
 struct VideoSettingsView: View {
     @Bindable var settings: SettingsStore
+    var permissionService: PermissionService
 
     private var alphaChannelHelpText: String {
         switch settings.videoCodec {
@@ -166,9 +167,32 @@ struct VideoSettingsView: View {
                 Toggle("Show Window Shadows", isOn: $settings.showWindowShadows)
                     .help("Include window shadows when capturing individual windows")
             }
+
+            Section("Permissions") {
+                ScreenRecordingPermissionRow(permissionService: permissionService) {
+                    requestOrOpenScreenRecordingSettings()
+                }
+
+                Text("Required to capture your screen. If Capster was recently renamed or updated, this may need to be granted again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .task {
+            permissionService.updatePermissionStates()
+        }
+    }
+
+    /// Requests screen recording access if not yet determined, or opens System Settings
+    /// if it was previously denied (macOS won't re-prompt once denied).
+    private func requestOrOpenScreenRecordingSettings() {
+        if permissionService.screenRecordingState == .denied {
+            permissionService.openScreenRecordingSettings()
+        } else {
+            permissionService.requestScreenRecordingPermission()
+        }
     }
 }
 
@@ -434,9 +458,9 @@ struct AutomationSettingsView: View {
                     .disabled(!settings.chorusUploadEnabled)
                     .help("Private recordings in Chorus are only visible to you and limit certain features. Turn off to make uploads visible to your team.")
 
-                Toggle("Ask for a Name Before Uploading", isOn: $settings.chorusRenameBeforeUploadEnabled)
+                Toggle("Ask for a Name After Recording", isOn: $settings.chorusRenameBeforeUploadEnabled)
                     .disabled(!settings.chorusUploadEnabled)
-                    .help("Pauses before uploading so you can rename the recording. The name is applied to the file itself, so it's also what Chorus shows as the recording's title.")
+                    .help("Pauses right after a recording finishes so you can name it, before any transcoding or upload happens. The name is applied to the file itself and is also what Chorus shows as the recording's title.")
 
                 LabeledContent("Chorus Account") {
                     HStack {

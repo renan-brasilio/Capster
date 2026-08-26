@@ -14,6 +14,12 @@ struct PostProcessingPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if let prompt = coordinator.renamePrompt {
+                RenameRow(prompt: prompt) { newName in
+                    coordinator.submitRename(newName)
+                }
+            }
+
             VStack(alignment: .leading, spacing: 10) {
                 if coordinator.transcodeState != .notNeeded {
                     StepRow(title: "Transcode", state: coordinator.transcodeState)
@@ -21,11 +27,7 @@ struct PostProcessingPanelView: View {
                 if coordinator.gifExportState != .notNeeded {
                     StepRow(title: "Export GIF", state: coordinator.gifExportState)
                 }
-                if let prompt = coordinator.renamePrompt {
-                    RenameRow(prompt: prompt) { newName in
-                        coordinator.submitRename(newName)
-                    }
-                } else if coordinator.uploadState != .notNeeded {
+                if coordinator.uploadState != .notNeeded {
                     StepRow(title: "Upload to Chorus", state: coordinator.uploadState)
                 }
             }
@@ -62,9 +64,9 @@ struct PostProcessingPanelView: View {
     }
 }
 
-/// Pauses the "Upload to Chorus" step to let the user rename the recording. The name
-/// entered here is applied to the file on disk, so it's also what Chorus shows as the
-/// recording's title - Chorus derives it from the uploaded file's name.
+/// Pauses the pipeline right after recording, before any processing, to let the user
+/// rename the recording. The name entered here is applied to the file on disk, so the
+/// (possibly transcoded) file and Chorus's displayed title all end up matching it.
 private struct RenameRow: View {
     let prompt: PostProcessingCoordinator.RenamePrompt
     let onSubmit: (String?) -> Void
@@ -79,17 +81,28 @@ private struct RenameRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Upload to Chorus")
+            Text("Name This Recording")
                 .font(.headline)
 
             TextField("Recording Name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { onSubmit(name) }
 
+            VStack(alignment: .leading, spacing: 2) {
+                LabeledContent("Duration", value: prompt.formattedDuration)
+                LabeledContent("Save Location") {
+                    Text(prompt.destinationDirectory.path(percentEncoded: false))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             HStack {
                 Spacer()
                 Button("Skip") { onSubmit(nil) }
-                Button("Upload") { onSubmit(name) }
+                Button("Continue") { onSubmit(name) }
                     .keyboardShortcut(.defaultAction)
             }
         }

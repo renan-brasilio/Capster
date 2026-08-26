@@ -24,10 +24,14 @@ final class PostProcessingCoordinator {
         case failed(String)
     }
 
-    /// A pending "rename before upload" prompt, shown by the status panel. Non-nil only
-    /// while the upload step is paused waiting for `submitRename(_:)`.
+    /// A pending rename prompt, shown by the status panel right after the recording
+    /// finishes and before any processing starts. Non-nil only while the pipeline is
+    /// paused waiting for `submitRename(_:)`. `formattedDuration` and `destinationDirectory`
+    /// are read-only context shown alongside the name field.
     struct RenamePrompt: Equatable {
         let suggestedName: String
+        let formattedDuration: String
+        let destinationDirectory: URL
     }
 
     private(set) var transcodeState: StepState = .notNeeded
@@ -86,7 +90,8 @@ final class PostProcessingCoordinator {
 
     /// Starts the pipeline for a just-finished recording. No-ops if no automation is
     /// enabled. Returns immediately; the pipeline runs in an internal `Task`.
-    func start(recordingURL: URL) {
+    /// `formattedDuration` is only used to display in the rename prompt, if shown.
+    func start(recordingURL: URL, formattedDuration: String = "") {
         guard settings.handBrakeTranscodeEnabled || settings.gifExportEnabled || settings.chorusUploadEnabled else { return }
 
         currentTask?.cancel()
@@ -96,7 +101,7 @@ final class PostProcessingCoordinator {
         chorusCallID = nil
 
         currentTask = Task { [weak self] in
-            await self?.run(recordingURL: recordingURL)
+            await self?.run(recordingURL: recordingURL, formattedDuration: formattedDuration)
         }
     }
 
@@ -124,11 +129,27 @@ final class PostProcessingCoordinator {
         await currentTask?.value
     }
 
-    private func run(recordingURL: URL) async {
+    private func run(recordingURL: URL, formattedDuration: String) async {
         let accessedOutputDir = settings.startAccessingOutputDirectory()
         defer { if accessedOutputDir { settings.stopAccessingOutputDirectory() } }
 
         var workingURL = recordingURL
+
+        // Renaming happens first, before any processing, so the same name carries through
+        // to the transcoded file, the GIF, and the name Chorus shows - not just the file
+        // that happens to be current when the upload step runs.
+        if settings.chorusUploadEnabled && settings.chorusRenameBeforeUploadEnabled {
+            let suggestedName = workingURL.deletingPathExtension().lastPathComponent
+            if let newName = await requestRename(
+                suggestedName: suggestedName,
+                formattedDuration: formattedDuration,
+                destinationDirectory: workingURL.deletingLastPathComponent()
+            ) {
+                workingURL = renamedFile(at: workingURL, toBaseName: newName) ?? workingURL
+            }
+        }
+
+        if Task.isCancelled { return }
 
         if settings.handBrakeTranscodeEnabled {
             workingURL = await runTranscode(inputURL: workingURL)
@@ -224,18 +245,7 @@ final class PostProcessingCoordinator {
         }
     }
 
-    private func runUpload(fileURL initialFileURL: URL) async {
-        var fileURL = initialFileURL
-
-        if settings.chorusRenameBeforeUploadEnabled {
-            let suggestedName = fileURL.deletingPathExtension().lastPathComponent
-            if let newName = await requestRename(suggestedName: suggestedName) {
-                fileURL = renamedFile(at: fileURL, toBaseName: newName) ?? fileURL
-            }
-        }
-
-        if Task.isCancelled { return }
-
+    private func runUpload(fileURL: URL) async {
         uploadState = .running(progressText: "Uploading…", fraction: nil)
         notificationService.sendUploadStartedNotification(fileURL: fileURL)
 
@@ -249,7 +259,11 @@ final class PostProcessingCoordinator {
 
         do {
             let result = try await uploadService.upload(
-                fileURL: fileURL, cookieHeader: cookieHeader, xsrfToken: xsrfToken, isPrivate: settings.chorusUploadPrivate
+                fileURL: fileURL,
+                title: fileURL.deletingPathExtension().lastPathComponent,
+                cookieHeader: cookieHeader,
+                xsrfToken: xsrfToken,
+                isPrivate: settings.chorusUploadPrivate
             )
             chorusCallID = result.callID
             uploadState = .succeeded
@@ -263,10 +277,14 @@ final class PostProcessingCoordinator {
 
     /// Suspends until the status panel calls `submitRename(_:)`, surfacing `renamePrompt`
     /// for it to display in the meantime.
-    private func requestRename(suggestedName: String) async -> String? {
+    private func requestRename(suggestedName: String, formattedDuration: String, destinationDirectory: URL) async -> String? {
         await withCheckedContinuation { continuation in
             renameContinuation = continuation
-            renamePrompt = RenamePrompt(suggestedName: suggestedName)
+            renamePrompt = RenamePrompt(
+                suggestedName: suggestedName,
+                formattedDuration: formattedDuration,
+                destinationDirectory: destinationDirectory
+            )
         }
     }
 

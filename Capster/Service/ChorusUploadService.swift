@@ -44,24 +44,32 @@ struct ChorusUploadResult {
 
 // MARK: - Request contract, captured 2026-08-26 from a real Chorus account via the
 // browser's DevTools Network tab while using the "Import a Recording" feature under
-// Chorus > Settings > Personal Settings. This is Chorus's own internal web-app
-// endpoint, not the documented public REST API (`api-docs.chorus.ai`) - used because
-// most users don't have the role permission needed to generate an API token for that
-// one. Auth is the session `Cookie` header plus an `X-Xsrftoken` header, both captured
-// by `ChorusLoginView`'s embedded login flow and held by `ChorusSessionService`.
-// `X-Xsrftoken` is just the value of the `_xsrf` cookie echoed back as a header - a
-// standard double-submit CSRF pattern (Tornado's default cookie name, suggesting
-// Chorus's backend is Tornado-based).
+// Chorus > Settings > Personal Settings, and later by watching Chorus's own "Recording
+// Settings" rename dialog. This is Chorus's own internal web-app endpoint, not the
+// documented public REST API (`api-docs.chorus.ai`) - used because most users don't have
+// the role permission needed to generate an API token for that one. Auth is the session
+// `Cookie` header plus an `X-Xsrftoken` header, both captured by `ChorusLoginView`'s
+// embedded login flow and held by `ChorusSessionService`. `X-Xsrftoken` is just the value
+// of the `_xsrf` cookie echoed back as a header - a standard double-submit CSRF pattern
+// (Tornado's default cookie name, suggesting Chorus's backend is Tornado-based).
 //
-// Three sequential calls, confirmed against real responses:
+// Four sequential calls, confirmed against real responses:
 //   1. POST /api/recording/upload/          multipart, field "file"
 //        -> {"callid": "...", "account_id": null, "success": true}
-//   2. PATCH /api/recording/access/{callid}  JSON {"is_private": <bool>}
-//   3. POST /api/recording/v2                form-urlencoded:
+//   2. POST /api/recording/v2               form-urlencoded:
 //        callid=<callid>&ext_id=&ext_name=&ext_type=
 //      (CRM/meeting association fields - left blank since Capster has no CRM context
 //      to offer; Chorus pre-fills these from other signals when a real user does it
 //      through the UI.)
+//   3. POST /api/recording/v2/              form-urlencoded:
+//        callid=<callid>&name=stage&value=<title>
+//      This is what actually sets the recording's displayed title - confirmed by
+//      watching Chorus's own rename dialog fire this exact request. It's a generic
+//      "update one field" endpoint (`name` selects the field, `value` is the new value);
+//      `stage` is Chorus's internal key for the title field despite the name, and the
+//      trailing slash is what distinguishes this from the association call above, which
+//      hits the same path without one.
+//   4. PATCH /api/recording/access/{callid}  JSON {"is_private": <bool>}
 //
 // Unlike the documented API, no response ever exposes a viewable link for the
 // recording, so `ChorusUploadResult` only carries the call ID.
@@ -69,6 +77,7 @@ struct ChorusUploadResult {
 private enum ChorusEndpoint {
     static let upload = URL(string: "https://chorus.ai/api/recording/upload/")!
     static let v2 = URL(string: "https://chorus.ai/api/recording/v2")!
+    static let v2SetField = URL(string: "https://chorus.ai/api/recording/v2/")!
 
     static func access(callID: String) -> URL {
         URL(string: "https://chorus.ai/api/recording/access/\(callID)")!
@@ -88,7 +97,10 @@ final class ChorusUploadService {
         self.session = session
     }
 
-    func upload(fileURL: URL, cookieHeader: String, xsrfToken: String, isPrivate: Bool) async throws -> ChorusUploadResult {
+    /// `title` becomes the recording's displayed name in Chorus - by default this should
+    /// be `fileURL`'s own name (without extension), so Chorus always shows the same name
+    /// the file is saved under locally.
+    func upload(fileURL: URL, title: String, cookieHeader: String, xsrfToken: String, isPrivate: Bool) async throws -> ChorusUploadResult {
         guard !cookieHeader.isEmpty, !xsrfToken.isEmpty else { throw ChorusUploadError.notSignedIn }
 
         let callID = try await uploadFile(fileURL: fileURL, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
@@ -96,6 +108,7 @@ final class ChorusUploadService {
         // that record's own default sharing, doing it first would clobber an explicit
         // privacy choice made here.
         try await associate(callID: callID, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
+        try await setTitle(callID: callID, title: title, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
         try await setPrivacy(callID: callID, isPrivate: isPrivate, cookieHeader: cookieHeader, xsrfToken: xsrfToken)
 
         logger.info("Chorus upload succeeded, callid: \(callID)")
@@ -164,6 +177,27 @@ final class ChorusUploadService {
         request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
 
         _ = try await performExpectingSuccess(request, step: "associate", retryCount: 4)
+    }
+
+    /// Sets the recording's displayed title in Chorus. Uses the same generic "update one
+    /// field" endpoint as `associate`, but with a trailing slash and a `name`/`value` pair
+    /// instead - `name` is always the literal string "stage" here, which is Chorus's
+    /// internal key for the title field (see the request contract note above).
+    private func setTitle(callID: String, title: String, cookieHeader: String, xsrfToken: String) async throws {
+        var request = URLRequest(url: ChorusEndpoint.v2SetField)
+        request.httpMethod = "POST"
+        applyAuthHeaders(cookieHeader: cookieHeader, xsrfToken: xsrfToken, to: &request)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "callid", value: callID),
+            URLQueryItem(name: "name", value: "stage"),
+            URLQueryItem(name: "value", value: title)
+        ]
+        request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+
+        _ = try await performExpectingSuccess(request, step: "setTitle", retryCount: 4)
     }
 
     // MARK: - Helpers

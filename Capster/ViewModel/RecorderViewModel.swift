@@ -73,9 +73,13 @@ final class RecorderViewModel {
     }
 
     var formattedDuration: String {
-        let hours = Int(recordingDuration) / 3600
-        let minutes = (Int(recordingDuration) % 3600) / 60
-        let seconds = Int(recordingDuration) % 60
+        Self.formatDuration(recordingDuration)
+    }
+
+    static func formatDuration(_ duration: TimeInterval) -> String {
+        let hours = Int(duration) / 3600
+        let minutes = (Int(duration) % 3600) / 60
+        let seconds = Int(duration) % 60
 
         if hours > 0 {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
@@ -418,6 +422,7 @@ final class RecorderViewModel {
 
             // Finalize file
             let (outputURL, videoFrameCount) = try await assetWriter.finishWriting()
+            let finishedRecordingDuration = formattedDuration
 
             state = .idle
             recordingDuration = 0
@@ -446,7 +451,7 @@ final class RecorderViewModel {
             }
 
             if settings.handBrakeTranscodeEnabled || settings.gifExportEnabled || settings.chorusUploadEnabled {
-                postProcessing.start(recordingURL: outputURL)
+                postProcessing.start(recordingURL: outputURL, formattedDuration: finishedRecordingDuration)
                 postProcessingPanel.show(coordinator: postProcessing)
             }
 
