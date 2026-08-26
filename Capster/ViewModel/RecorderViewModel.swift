@@ -296,6 +296,18 @@ final class RecorderViewModel {
                 await cameraSession.start(deviceID: settings.selectedCameraID)
             }
 
+            let hasPrepareWindow = settings.presenterOverlayEnabled || settings.countdownEnabled
+
+            // With no countdown/Presenter Overlay wait, recording writes in real time the
+            // instant capture starts, so this is the only point where playing the cue can't
+            // end up in the system audio or microphone track - once ScreenCaptureKit is
+            // capturing, anything played through the speakers gets picked up like any other
+            // sound. When a prepare window exists, the cue instead plays after it below,
+            // while writing is still paused.
+            if !hasPrepareWindow {
+                NSSound(named: "Tink")?.play()
+            }
+
             // Start capture with the calculated video size
             logger.info("Starting capture engine...")
             try await captureEngine.startCapture(with: settings, videoSize: videoSize, sourceRect: selectedSourceRect)
@@ -313,7 +325,7 @@ final class RecorderViewModel {
             // pause immediately (nothing meaningful is written during this window, same
             // mechanism as the manual Pause button) while the user enables it, then resume
             // for real once they're ready.
-            if settings.presenterOverlayEnabled || settings.countdownEnabled {
+            if hasPrepareWindow {
                 isPreparing = true
                 pauseInternal()
 
@@ -325,6 +337,14 @@ final class RecorderViewModel {
 
                 if settings.countdownEnabled, let screen {
                     await countdownOverlay.runCountdown(seconds: 3, on: screen)
+                }
+
+                // Still paused here, so the cue is picked up by ScreenCaptureKit like any
+                // other system sound but dropped rather than written - waiting out its
+                // duration before resuming keeps it from bleeding into the resumed track.
+                if let sound = NSSound(named: "Tink") {
+                    sound.play()
+                    try? await Task.sleep(for: .seconds(sound.duration))
                 }
 
                 resumeInternal()
@@ -385,6 +405,11 @@ final class RecorderViewModel {
             recordingDuration = 0
 
             logger.info("Recording stopped and saved to: \(outputURL.lastPathComponent)")
+            NSSound(named: "Pop")?.play()
+
+            if settings.openFolderAfterRecording {
+                NSWorkspace.shared.selectFile(outputURL.path(percentEncoded: false), inFileViewerRootedAtPath: outputURL.deletingLastPathComponent().path(percentEncoded: false))
+            }
 
             // Brief delay to ensure screen sharing mode has fully stopped before sending notification
             try? await Task.sleep(for: .milliseconds(100))

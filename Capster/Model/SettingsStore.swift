@@ -284,6 +284,19 @@ final class SettingsStore {
         }
     }
 
+    /// Whether the output folder is revealed in Finder once a recording finishes saving.
+    var openFolderAfterRecording: Bool {
+        get {
+            access(keyPath: \.openFolderAfterRecording)
+            return defaults.bool(forKey: "openFolderAfterRecording")
+        }
+        set {
+            withMutation(keyPath: \.openFolderAfterRecording) {
+                defaults.set(newValue, forKey: "openFolderAfterRecording")
+            }
+        }
+    }
+
     // MARK: - Video Settings
 
     var frameRate: FrameRate {

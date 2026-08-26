@@ -35,7 +35,11 @@ struct CapsterApp: App {
 
         // Settings window
         Settings {
-            SettingsView(settings: viewModel.settings, updaterService: updaterService)
+            SettingsView(
+                settings: viewModel.settings,
+                updaterService: updaterService,
+                permissionService: viewModel.permissionService
+            )
         }
     }
 

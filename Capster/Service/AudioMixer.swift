@@ -114,11 +114,10 @@ final class AudioMixer: @unchecked Sendable {
         label: String
     ) {
         guard isRunning else {
-            logger.error("schedule(\(label)) dropped - mixer not running")
+            logger.error("schedule(\(label, privacy: .public)) dropped - mixer not running")
             return
         }
-        guard let sourceBuffer = Self.pcmBuffer(from: sampleBuffer) else {
-            logger.error("schedule(\(label)) dropped - pcmBuffer(from:) returned nil")
+        guard let sourceBuffer = Self.pcmBuffer(from: sampleBuffer, label: label, logger: logger) else {
             return
         }
 
@@ -197,21 +196,37 @@ final class AudioMixer: @unchecked Sendable {
 
     /// Wraps a `CMSampleBuffer`'s audio data in an `AVAudioPCMBuffer` without copying,
     /// keeping the sample buffer's underlying block buffer alive for as long as needed.
-    private static func pcmBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription),
-            let format = AVAudioFormat(streamDescription: asbd)
-        else { return nil }
+    private static func pcmBuffer(from sampleBuffer: CMSampleBuffer, label: String, logger: Logger) -> AVAudioPCMBuffer? {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+            logger.error("pcmBuffer(\(label, privacy: .public)) dropped - no format description")
+            return nil
+        }
+        guard let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            logger.error("pcmBuffer(\(label, privacy: .public)) dropped - no ASBD")
+            return nil
+        }
+        guard let format = AVAudioFormat(streamDescription: asbd) else {
+            logger.error("pcmBuffer(\(label, privacy: .public)) dropped - AVAudioFormat init failed for formatID=\(asbd.pointee.mFormatID), flags=\(asbd.pointee.mFormatFlags), channels=\(asbd.pointee.mChannelsPerFrame), bitsPerChannel=\(asbd.pointee.mBitsPerChannel), sampleRate=\(asbd.pointee.mSampleRate)")
+            return nil
+        }
 
+        // Interleaved audio packs every channel into one buffer, so the list needs
+        // exactly 1 entry regardless of channel count. Only non-interleaved (planar)
+        // audio needs one buffer per channel. Allocating for `channelCount` unconditionally
+        // made this fail for interleaved sources (e.g. many microphones report interleaved
+        // stereo) with kCMSampleBufferError_ArrayTooSmall, since the function determines
+        // the buffer count from the list size passed in, not just the byte size.
         let channelCount = Int(format.channelCount)
-        let bufferListPointer = AudioBufferList.allocate(maximumBuffers: channelCount)
+        let bufferCount = format.isInterleaved ? 1 : channelCount
+        let bufferListPointer = AudioBufferList.allocate(maximumBuffers: bufferCount)
 
         var blockBuffer: CMBlockBuffer?
+        var sizeNeeded = 0
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
-            bufferListSizeNeededOut: nil,
+            bufferListSizeNeededOut: &sizeNeeded,
             bufferListOut: bufferListPointer.unsafeMutablePointer,
-            bufferListSize: AudioBufferList.sizeInBytes(maximumBuffers: channelCount),
+            bufferListSize: AudioBufferList.sizeInBytes(maximumBuffers: bufferCount),
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
             flags: 0,
@@ -219,6 +234,7 @@ final class AudioMixer: @unchecked Sendable {
         )
 
         guard status == noErr else {
+            logger.error("pcmBuffer(\(label, privacy: .public)) dropped - CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer status=\(status), sizeNeeded=\(sizeNeeded), allocatedSize=\(AudioBufferList.sizeInBytes(maximumBuffers: bufferCount)), channelCount=\(channelCount), interleaved=\(format.isInterleaved), sampleRate=\(format.sampleRate)")
             bufferListPointer.unsafeMutablePointer.deallocate()
             return nil
         }
@@ -240,6 +256,7 @@ final class AudioMixer: @unchecked Sendable {
         )
 
         guard let pcmBuffer else {
+            logger.error("pcmBuffer(\(label, privacy: .public)) dropped - AVAudioPCMBuffer(bufferListNoCopy:) init failed, channelCount=\(channelCount), interleaved=\(format.isInterleaved)")
             bufferListPointer.unsafeMutablePointer.deallocate()
             return nil
         }

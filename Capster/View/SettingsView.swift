@@ -13,6 +13,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var settings: SettingsStore
     var updaterService: UpdaterService
+    var permissionService: PermissionService
 
     var body: some View {
         TabView {
@@ -25,7 +26,7 @@ struct SettingsView: View {
             }
 
             Tab("Audio", systemImage: "waveform") {
-                AudioSettingsView(settings: settings)
+                AudioSettingsView(settings: settings, permissionService: permissionService)
             }
 
             Tab("Shortcuts", systemImage: "keyboard") {
@@ -174,6 +175,9 @@ struct VideoSettingsView: View {
 
 struct AudioSettingsView: View {
     @Bindable var settings: SettingsStore
+    var permissionService: PermissionService
+
+    @State private var isRequestingMicrophoneAccess = false
 
     var body: some View {
         Form {
@@ -183,6 +187,19 @@ struct AudioSettingsView: View {
 
                 Toggle("Capture Microphone", isOn: $settings.captureMicrophone)
                     .help("Record audio from the default microphone input")
+            }
+
+            Section("Permissions") {
+                MicrophonePermissionRow(
+                    permissionService: permissionService,
+                    isRequesting: isRequestingMicrophoneAccess
+                ) {
+                    requestOrOpenMicrophoneSettings()
+                }
+
+                Text("Required to record from the microphone. If Capster was recently renamed or updated, this may need to be granted again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Format") {
@@ -209,6 +226,76 @@ struct AudioSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .task {
+            permissionService.updatePermissionStates()
+        }
+    }
+
+    /// Requests microphone access if not yet determined, or opens System Settings
+    /// if it was previously denied (macOS won't re-prompt once denied).
+    private func requestOrOpenMicrophoneSettings() {
+        if permissionService.microphoneState == .denied {
+            permissionService.openMicrophoneSettings()
+            return
+        }
+
+        isRequestingMicrophoneAccess = true
+        Task {
+            await permissionService.requestMicrophonePermission()
+            isRequestingMicrophoneAccess = false
+        }
+    }
+}
+
+/// A row showing the current microphone permission state, with an action
+/// to grant access (if undetermined) or open System Settings (if denied).
+struct MicrophonePermissionRow: View {
+    let permissionService: PermissionService
+    let isRequesting: Bool
+    let action: () -> Void
+
+    private var statusIcon: String {
+        switch permissionService.microphoneState {
+        case .granted: "checkmark.circle.fill"
+        case .denied: "xmark.circle.fill"
+        case .unknown: "questionmark.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch permissionService.microphoneState {
+        case .granted: .green
+        case .denied: .red
+        case .unknown: .orange
+        }
+    }
+
+    private var statusText: String {
+        switch permissionService.microphoneState {
+        case .granted: "Granted"
+        case .denied: "Denied"
+        case .unknown: "Not Requested"
+        }
+    }
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                Image(systemName: statusIcon)
+                    .foregroundStyle(statusColor)
+                Text(statusText)
+                    .foregroundStyle(.secondary)
+
+                if permissionService.microphoneState != .granted {
+                    Button(isRequesting ? "Requesting…" : (permissionService.microphoneState == .denied ? "Open System Settings" : "Grant Access")) {
+                        action()
+                    }
+                    .disabled(isRequesting)
+                }
+            }
+        } label: {
+            Text("Microphone Access")
+        }
     }
 }
 
@@ -412,6 +499,7 @@ struct GeneralSettingsView: View {
 
             Section("Recording") {
                 Toggle("3-Second Countdown Before Recording", isOn: $settings.countdownEnabled)
+                Toggle("Open Folder When Recording Is Done", isOn: $settings.openFolderAfterRecording)
             }
 
             Section("Software Updates") {
@@ -486,5 +574,5 @@ struct AboutSection: View {
 // MARK: - Preview
 
 #Preview {
-    SettingsView(settings: SettingsStore(), updaterService: UpdaterService())
+    SettingsView(settings: SettingsStore(), updaterService: UpdaterService(), permissionService: PermissionService())
 }
