@@ -104,6 +104,7 @@ final class RecorderViewModel {
     private let captureEngine: CaptureEngine
     private let assetWriter: AssetWriter
     private let cameraSession = CameraSession()
+    private let doNotDisturbService = DoNotDisturbService()
     private let postProcessingPanel = PostProcessingPanelCoordinator()
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "RecorderViewModel")
@@ -290,6 +291,10 @@ final class RecorderViewModel {
                 MediaKeyService.togglePlayPause()
             }
 
+            if settings.doNotDisturbEnabled {
+                await doNotDisturbService.enable(shortcutName: settings.doNotDisturbOnShortcutName)
+            }
+
             // Stop any active live preview before starting recording
             logger.info("Stopping any active live preview...")
             await previewService.stopPreview()
@@ -385,6 +390,12 @@ final class RecorderViewModel {
             assetWriter.cancel()
             settings.stopAccessingOutputDirectory()
 
+            // Undo the Do Not Disturb enabled above - a failed start shouldn't leave it on
+            // with no recording actually happening.
+            if settings.doNotDisturbEnabled {
+                await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
+            }
+
             // lastError has no UI representation, so every start failure has to be surfaced
             // as a notification - otherwise the record button silently does nothing.
             notificationService.sendRecordingStartFailedNotification(error: error)
@@ -430,6 +441,10 @@ final class RecorderViewModel {
             logger.info("Recording stopped and saved to: \(outputURL.lastPathComponent)")
             NSSound(named: "Pop")?.play()
 
+            if settings.doNotDisturbEnabled {
+                await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
+            }
+
             if settings.openFolderAfterRecording {
                 NSWorkspace.shared.selectFile(outputURL.path(percentEncoded: false), inFileViewerRootedAtPath: outputURL.deletingLastPathComponent().path(percentEncoded: false))
             }
@@ -464,6 +479,10 @@ final class RecorderViewModel {
             settings.stopAccessingOutputDirectory()
             notificationService.sendRecordingFailedNotification(error: error)
             logger.error("Failed to stop recording: \(error.localizedDescription)")
+
+            if settings.doNotDisturbEnabled {
+                await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
+            }
         }
     }
 
@@ -495,6 +514,10 @@ final class RecorderViewModel {
 
         state = .idle
         recordingDuration = 0
+
+        if settings.doNotDisturbEnabled {
+            await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
+        }
 
         logger.info("Recording cancelled and discarded")
     }

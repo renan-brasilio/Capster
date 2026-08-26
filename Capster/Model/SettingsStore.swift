@@ -311,6 +311,58 @@ final class SettingsStore {
         }
     }
 
+    /// Whether Do Not Disturb is turned on for the duration of a recording, via the two
+    /// user-created Shortcuts named by `doNotDisturbOnShortcutName`/`doNotDisturbOffShortcutName`.
+    /// macOS has no direct API for toggling Focus modes, so this is the only way to do it.
+    var doNotDisturbEnabled: Bool {
+        get {
+            access(keyPath: \.doNotDisturbEnabled)
+            return defaults.bool(forKey: "doNotDisturbEnabled")
+        }
+        set {
+            withMutation(keyPath: \.doNotDisturbEnabled) {
+                defaults.set(newValue, forKey: "doNotDisturbEnabled")
+            }
+        }
+    }
+
+    static let defaultDoNotDisturbOnShortcutName = "Capster DND On"
+    static let defaultDoNotDisturbOffShortcutName = "Capster DND Off"
+
+    /// Name of the Shortcuts.app shortcut run (via `shortcuts run`) to turn Do Not Disturb
+    /// on when a recording starts. Must contain a single "Set Focus" action.
+    var doNotDisturbOnShortcutName: String {
+        get {
+            access(keyPath: \.doNotDisturbOnShortcutName)
+            guard let stored = defaults.string(forKey: "doNotDisturbOnShortcutName"), !stored.isEmpty else {
+                return Self.defaultDoNotDisturbOnShortcutName
+            }
+            return stored
+        }
+        set {
+            withMutation(keyPath: \.doNotDisturbOnShortcutName) {
+                defaults.set(newValue, forKey: "doNotDisturbOnShortcutName")
+            }
+        }
+    }
+
+    /// Name of the Shortcuts.app shortcut run to turn Do Not Disturb back off when a
+    /// recording stops. Must contain a single "Set Focus" action.
+    var doNotDisturbOffShortcutName: String {
+        get {
+            access(keyPath: \.doNotDisturbOffShortcutName)
+            guard let stored = defaults.string(forKey: "doNotDisturbOffShortcutName"), !stored.isEmpty else {
+                return Self.defaultDoNotDisturbOffShortcutName
+            }
+            return stored
+        }
+        set {
+            withMutation(keyPath: \.doNotDisturbOffShortcutName) {
+                defaults.set(newValue, forKey: "doNotDisturbOffShortcutName")
+            }
+        }
+    }
+
     // MARK: - Video Settings
 
     var frameRate: FrameRate {

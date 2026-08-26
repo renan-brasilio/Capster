@@ -687,6 +687,18 @@ struct GeneralSettingsView: View {
                 Toggle("Open Folder When Recording Is Done", isOn: $settings.openFolderAfterRecording)
                 Toggle("Pause Music When Recording Starts", isOn: $settings.pauseMusicOnRecordStartEnabled)
                     .help("Sends the system Play/Pause media key when a recording starts, so music playing through your speakers isn't picked up. Like a real media key, this can't tell whether anything is actually playing.")
+
+                Toggle("Enable Do Not Disturb While Recording", isOn: $settings.doNotDisturbEnabled)
+                    .help("Turns Do Not Disturb on when a recording starts and off when it stops. macOS has no direct way to do this, so it runs the two Shortcuts named below - see the note underneath for how to create them.")
+
+                if settings.doNotDisturbEnabled {
+                    TextField("Turn On Shortcut", text: $settings.doNotDisturbOnShortcutName)
+                    TextField("Turn Off Shortcut", text: $settings.doNotDisturbOffShortcutName)
+
+                    Text("Create these two shortcuts in the Shortcuts app (matching these exact names), each containing a single \"Set Focus\" action set to Do Not Disturb - Turn On / Turn Off.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Software Updates") {
