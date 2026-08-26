@@ -324,6 +324,56 @@ struct MicrophonePermissionRow: View {
     }
 }
 
+/// A row showing the current screen recording permission state, with an action
+/// to grant access (if undetermined) or open System Settings (if denied).
+struct ScreenRecordingPermissionRow: View {
+    let permissionService: PermissionService
+    let action: () -> Void
+
+    private var statusIcon: String {
+        switch permissionService.screenRecordingState {
+        case .granted: "checkmark.circle.fill"
+        case .denied: "xmark.circle.fill"
+        case .unknown: "questionmark.circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch permissionService.screenRecordingState {
+        case .granted: .green
+        case .denied: .red
+        case .unknown: .orange
+        }
+    }
+
+    private var statusText: String {
+        switch permissionService.screenRecordingState {
+        case .granted: "Granted"
+        case .denied: "Denied"
+        case .unknown: "Not Requested"
+        }
+    }
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                Image(systemName: statusIcon)
+                    .foregroundStyle(statusColor)
+                Text(statusText)
+                    .foregroundStyle(.secondary)
+
+                if permissionService.screenRecordingState != .granted {
+                    Button(permissionService.screenRecordingState == .denied ? "Open System Settings" : "Grant Access") {
+                        action()
+                    }
+                }
+            }
+        } label: {
+            Text("Screen Recording Access")
+        }
+    }
+}
+
 // MARK: - Automation Settings
 
 struct AutomationSettingsView: View {
