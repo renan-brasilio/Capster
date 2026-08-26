@@ -611,6 +611,8 @@ struct GeneralSettingsView: View {
             Section("Recording") {
                 Toggle("3-Second Countdown Before Recording", isOn: $settings.countdownEnabled)
                 Toggle("Open Folder When Recording Is Done", isOn: $settings.openFolderAfterRecording)
+                Toggle("Pause Music When Recording Starts", isOn: $settings.pauseMusicOnRecordStartEnabled)
+                    .help("Sends the system Play/Pause media key when a recording starts, so music playing through your speakers isn't picked up. Like a real media key, this can't tell whether anything is actually playing.")
             }
 
             Section("Software Updates") {

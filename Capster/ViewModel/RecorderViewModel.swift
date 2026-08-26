@@ -280,6 +280,12 @@ final class RecorderViewModel {
 
             logger.info("Starting recording sequence...")
 
+            // Sent as early as possible so the pause has time to actually take effect
+            // before capture (and its audio track) starts below.
+            if settings.pauseMusicOnRecordStartEnabled {
+                MediaKeyService.togglePlayPause()
+            }
+
             // Stop any active live preview before starting recording
             logger.info("Stopping any active live preview...")
             await previewService.stopPreview()

@@ -297,6 +297,20 @@ final class SettingsStore {
         }
     }
 
+    /// Whether starting a recording sends the system Play/Pause media key first, so music
+    /// playing through the speakers doesn't get picked up in the recording.
+    var pauseMusicOnRecordStartEnabled: Bool {
+        get {
+            access(keyPath: \.pauseMusicOnRecordStartEnabled)
+            return defaults.bool(forKey: "pauseMusicOnRecordStartEnabled")
+        }
+        set {
+            withMutation(keyPath: \.pauseMusicOnRecordStartEnabled) {
+                defaults.set(newValue, forKey: "pauseMusicOnRecordStartEnabled")
+            }
+        }
+    }
+
     // MARK: - Video Settings
 
     var frameRate: FrameRate {
