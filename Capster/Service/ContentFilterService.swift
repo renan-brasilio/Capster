@@ -108,51 +108,60 @@ final class ContentFilterService {
             return filter
         }
 
-        // Get all available windows to find wallpaper/dock
         let content = try await SCShareableContent.current
-        let availableWindows = content.windows.filter { $0.isOnScreen }
+        let onScreenWindows = content.windows.filter { $0.isOnScreen }
 
-        var excludedWindows: [SCWindow] = []
+        // Excluding by application (rather than by the specific SCWindow instances found
+        // above) covers windows that don't exist yet - e.g. Capster's own menu bar
+        // popover, which is normally closed and only appears mid-recording when the user
+        // opens it to pause/stop. A window-ID-based exclusion snapshotted at filter-build
+        // time can never catch that; excluding the whole app does, for the lifetime of
+        // this filter.
+        var excludedApplications: [SCRunningApplication] = []
+        var exceptedWindows: [SCWindow] = []
 
-        for window in availableWindows {
-            let bundleID = window.owningApplication?.bundleIdentifier ?? ""
-            let windowTitle = window.title ?? ""
+        if !settings.showCapster, let capsterApp = content.applications.first(where: { $0.bundleIdentifier == Bundle.main.bundleIdentifier }) {
+            excludedApplications.append(capsterApp)
+            logger.debug("Excluding Capster application (all current and future windows)")
+        }
 
-            // Backstop is a macOS 26 layer behind wallpaper - exclude when hiding wallpaper
-            // Note: Backstop may not be owned by com.apple.dock
-            if !settings.showWallpaper && windowTitle.contains("Backstop") {
-                excludedWindows.append(window)
-                logger.debug("Excluding backstop window: \(windowTitle)")
-                continue
+        // Wallpaper and Dock are both owned by com.apple.dock as separate windows -
+        // excluding the whole app and excepting whichever should stay visible gives
+        // independent control over each, the same as the Capster case above.
+        if (!settings.showWallpaper || !settings.showDock), let dockApp = content.applications.first(where: { $0.bundleIdentifier == "com.apple.dock" }) {
+            excludedApplications.append(dockApp)
+
+            let dockWindows = onScreenWindows.filter { $0.owningApplication?.bundleIdentifier == "com.apple.dock" }
+            if settings.showWallpaper {
+                let wallpaperWindows = dockWindows.filter { ($0.title ?? "").hasPrefix("Wallpaper-") }
+                exceptedWindows.append(contentsOf: wallpaperWindows)
+                logger.debug("Excepting \(wallpaperWindows.count) wallpaper window(s) from Dock exclusion")
             }
-
-            // Exclude Capster's own windows if showCapster is false
-            if !settings.showCapster && bundleID == Bundle.main.bundleIdentifier {
-                excludedWindows.append(window)
-                logger.debug("Excluding Capster window: \(windowTitle)")
-                continue
-            }
-
-            // Wallpaper and Dock are both owned by com.apple.dock
-            guard bundleID == "com.apple.dock" else { continue }
-
-            let isWallpaper = windowTitle.hasPrefix("Wallpaper-")
-
-            if !settings.showWallpaper && isWallpaper {
-                excludedWindows.append(window)
-                logger.debug("Excluding wallpaper window: \(windowTitle)")
-            }
-
-            if !settings.showDock && !isWallpaper {
-                excludedWindows.append(window)
-                logger.debug("Excluding dock window: \(windowTitle)")
+            if settings.showDock {
+                let dockOnlyWindows = dockWindows.filter { !($0.title ?? "").hasPrefix("Wallpaper-") }
+                exceptedWindows.append(contentsOf: dockOnlyWindows)
+                logger.debug("Excepting \(dockOnlyWindows.count) dock window(s) from Dock exclusion")
             }
         }
 
-        logger.info("Excluding \(excludedWindows.count) windows from capture")
+        // Backstop is a macOS 26 layer behind wallpaper, not owned by com.apple.dock, so
+        // it needs its own (dynamically resolved, not hardcoded) owning application.
+        if !settings.showWallpaper,
+           let backstopWindow = onScreenWindows.first(where: { ($0.title ?? "").contains("Backstop") }),
+           let backstopApp = backstopWindow.owningApplication,
+           !excludedApplications.contains(where: { $0.processID == backstopApp.processID }) {
+            excludedApplications.append(backstopApp)
+            logger.debug("Excluding Backstop application")
+        }
 
-        // Create new filter with excluded windows
-        let newFilter = SCContentFilter(display: display, excludingWindows: excludedWindows)
+        guard !excludedApplications.isEmpty else {
+            logger.info("No applications to exclude, returning original filter")
+            return filter
+        }
+
+        logger.info("Excluding \(excludedApplications.count) application(s), excepting \(exceptedWindows.count) window(s)")
+
+        let newFilter = SCContentFilter(display: display, excludingApplications: excludedApplications, exceptingWindows: exceptedWindows)
         newFilter.includeMenuBar = settings.showMenuBar
 
         return newFilter

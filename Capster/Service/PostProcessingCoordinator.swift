@@ -149,6 +149,11 @@ final class PostProcessingCoordinator {
             }
         }
 
+        // Captured before transcoding, which appends " (Transcoded)" to the filename -
+        // the transcoded file is what actually gets uploaded, but Chorus's title should
+        // stay the clean recording name, not the on-disk transcoded filename.
+        let chorusTitle = workingURL.deletingPathExtension().lastPathComponent
+
         if Task.isCancelled { return }
 
         if settings.handBrakeTranscodeEnabled {
@@ -164,7 +169,7 @@ final class PostProcessingCoordinator {
         if Task.isCancelled { return }
 
         if settings.chorusUploadEnabled {
-            await runUpload(fileURL: workingURL)
+            await runUpload(fileURL: workingURL, title: chorusTitle)
         }
     }
 
@@ -245,7 +250,7 @@ final class PostProcessingCoordinator {
         }
     }
 
-    private func runUpload(fileURL: URL) async {
+    private func runUpload(fileURL: URL, title: String) async {
         uploadState = .running(progressText: "Uploading…", fraction: nil)
         notificationService.sendUploadStartedNotification(fileURL: fileURL)
 
@@ -260,7 +265,7 @@ final class PostProcessingCoordinator {
         do {
             let result = try await uploadService.upload(
                 fileURL: fileURL,
-                title: fileURL.deletingPathExtension().lastPathComponent,
+                title: title,
                 cookieHeader: cookieHeader,
                 xsrfToken: xsrfToken,
                 isPrivate: settings.chorusUploadPrivate

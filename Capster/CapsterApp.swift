@@ -7,6 +7,7 @@
 
 import AppKit
 import KeyboardShortcuts
+import OSLog
 import SwiftUI
 
 @main
@@ -14,6 +15,7 @@ struct CapsterApp: App {
     @State private var viewModel = RecorderViewModel()
     @State private var updaterService = UpdaterService()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "CapsterApp")
 
     var body: some Scene {
         // Menu bar extra - the primary interface
@@ -22,6 +24,9 @@ struct CapsterApp: App {
             MenuBarView(viewModel: viewModel)
                 .task {
                     appDelegate.viewModel = viewModel
+                    appDelegate.onOpenURLs = { urls in
+                        for url in urls { handleURL(url) }
+                    }
                     await viewModel.requestPermissionsOnLaunch()
                     registerKeyboardShortcuts()
                 }
@@ -39,7 +44,8 @@ struct CapsterApp: App {
                 settings: viewModel.settings,
                 updaterService: updaterService,
                 permissionService: viewModel.permissionService,
-                chorusSession: viewModel.chorusSession
+                chorusSession: viewModel.chorusSession,
+                slackSession: viewModel.slackSession
             )
         }
     }
@@ -48,6 +54,7 @@ struct CapsterApp: App {
 
     private func handleURL(_ url: URL) {
         guard url.scheme == "capster" else { return }
+        logger.info("Handling capster:// URL with host: \(url.host ?? "nil", privacy: .public)")
 
         switch url.host {
         case "toggle", "toggle-copy":
@@ -74,6 +81,16 @@ struct CapsterApp: App {
                     }
                 }
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: settings.outputDirectory.path)
+            }
+        case "slack-oauth-callback":
+            logger.info("Received Slack OAuth callback")
+            Task { @MainActor in
+                do {
+                    try await viewModel.slackSession.completeSignIn(callbackURL: url, clientID: viewModel.settings.slackClientID)
+                } catch {
+                    logger.error("Slack sign-in failed: \(error.localizedDescription, privacy: .public)")
+                    viewModel.notificationService.sendSlackSignInFailedNotification(error: error)
+                }
             }
         default:
             break

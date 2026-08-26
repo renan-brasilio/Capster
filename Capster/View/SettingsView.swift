@@ -15,6 +15,7 @@ struct SettingsView: View {
     var updaterService: UpdaterService
     var permissionService: PermissionService
     var chorusSession: ChorusSessionService
+    var slackSession: SlackSessionService
 
     var body: some View {
         TabView {
@@ -35,7 +36,7 @@ struct SettingsView: View {
             }
 
             Tab("Automation", systemImage: "wand.and.stars") {
-                AutomationSettingsView(settings: settings, chorusSession: chorusSession)
+                AutomationSettingsView(settings: settings, chorusSession: chorusSession, slackSession: slackSession)
             }
         }
         .frame(width: 500, height: 420)
@@ -379,6 +380,7 @@ struct ScreenRecordingPermissionRow: View {
 struct AutomationSettingsView: View {
     @Bindable var settings: SettingsStore
     var chorusSession: ChorusSessionService
+    var slackSession: SlackSessionService
 
     @State private var loginWindow = ChorusLoginWindowCoordinator()
     @State private var isInstallingHandBrake = false
@@ -388,6 +390,8 @@ struct AutomationSettingsView: View {
     @State private var isInstallingFFmpeg = false
     @State private var ffmpegInstallStatusText: String?
     @State private var ffmpegInstallErrorText: String?
+
+    @State private var slackClientSecretInput: String = ""
 
     private var handBrakeCLIPath: String? {
         settings.handBrakeCLIURL?.path(percentEncoded: false)
@@ -532,9 +536,54 @@ struct AutomationSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Slack Integration") {
+                TextField("Client ID", text: $settings.slackClientID)
+                    .help("From your Slack App's \"Basic Information\" page at api.slack.com/apps.")
+
+                SecureField("Client Secret", text: $slackClientSecretInput)
+                    .onChange(of: slackClientSecretInput) { _, newValue in
+                        slackSession.saveClientSecret(newValue)
+                    }
+
+                LabeledContent("Slack Account") {
+                    HStack {
+                        Text(slackSession.isSignedIn ? "Signed in" : "Not signed in")
+                            .foregroundStyle(.secondary)
+                        Button(slackSession.isSignedIn ? "Sign In Again" : "Sign In") {
+                            slackSession.beginSignIn(clientID: settings.slackClientID)
+                        }
+                        .disabled(settings.slackClientID.isEmpty || slackClientSecretInput.isEmpty)
+                        if slackSession.isSignedIn {
+                            Button("Sign Out", role: .destructive) {
+                                slackSession.signOut()
+                            }
+                        }
+                    }
+                }
+
+                Toggle("Set Status While Recording", isOn: $settings.slackStatusEnabled)
+                    .disabled(!slackSession.isSignedIn)
+
+                if settings.slackStatusEnabled {
+                    TextField("Status Text", text: $settings.slackStatusText)
+                    TextField("Status Emoji", text: $settings.slackStatusEmoji)
+                        .help("A Slack emoji code, e.g. :black_circle_for_record:")
+                }
+
+                Toggle("Enable Slack Do Not Disturb While Recording", isOn: $settings.slackDoNotDisturbEnabled)
+                    .disabled(!slackSession.isSignedIn)
+
+                Text("Requires your own Slack App - create one at api.slack.com/apps with the users.profile:write and dnd:write user scopes, and a redirect URL of \(SlackSessionService.redirectURI). Most workspaces don't allow installing arbitrary third-party apps otherwise. Your previous status is restored automatically once the recording stops.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .task {
+            slackClientSecretInput = slackSession.clientSecret ?? ""
+        }
     }
 
     /// Opens an NSOpenPanel to select the HandBrakeCLI executable
@@ -625,6 +674,9 @@ struct GeneralSettingsView: View {
     var updaterService: UpdaterService
 
     @State private var automaticallyChecksForUpdates: Bool
+    @State private var shortcutInstaller = DoNotDisturbShortcutInstallerService()
+    @State private var isCreatingShortcuts = false
+    @State private var shortcutInstallError: String?
 
     init(settings: SettingsStore, updaterService: UpdaterService) {
         self.settings = settings
@@ -685,19 +737,34 @@ struct GeneralSettingsView: View {
             Section("Recording") {
                 Toggle("3-Second Countdown Before Recording", isOn: $settings.countdownEnabled)
                 Toggle("Open Folder When Recording Is Done", isOn: $settings.openFolderAfterRecording)
-                Toggle("Pause Music When Recording Starts", isOn: $settings.pauseMusicOnRecordStartEnabled)
-                    .help("Sends the system Play/Pause media key when a recording starts, so music playing through your speakers isn't picked up. Like a real media key, this can't tell whether anything is actually playing.")
 
                 Toggle("Enable Do Not Disturb While Recording", isOn: $settings.doNotDisturbEnabled)
-                    .help("Turns Do Not Disturb on when a recording starts and off when it stops. macOS has no direct way to do this, so it runs the two Shortcuts named below - see the note underneath for how to create them.")
+                    .help("Turns Do Not Disturb on when a recording starts and off when it stops, by running the two Shortcuts named below.")
+
+                Text("macOS gives apps no direct way to turn Focus modes on or off - Shortcuts' \"Set Focus\" action is the only currently-working way to do it from outside the Shortcuts/Focus UI itself. That's why this needs two named Shortcuts (one to turn Do Not Disturb on, one to turn it off) instead of just being a plain toggle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 if settings.doNotDisturbEnabled {
                     TextField("Turn On Shortcut", text: $settings.doNotDisturbOnShortcutName)
                     TextField("Turn Off Shortcut", text: $settings.doNotDisturbOffShortcutName)
 
-                    Text("Create these two shortcuts in the Shortcuts app (matching these exact names), each containing a single \"Set Focus\" action set to Do Not Disturb - Turn On / Turn Off.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Button(isCreatingShortcuts ? "Creating…" : "Create Shortcuts") {
+                            createDoNotDisturbShortcuts()
+                        }
+                        .disabled(isCreatingShortcuts)
+
+                        Text("Builds and signs both shortcuts automatically - you'll still need to click \"Add Shortcut\" once for each when Shortcuts.app asks.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let shortcutInstallError {
+                        Text(shortcutInstallError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
 
@@ -734,6 +801,25 @@ struct GeneralSettingsView: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             settings.setCustomOutputDirectory(url)
+        }
+    }
+
+    /// Builds and signs both Do Not Disturb shortcuts, then hands them to Shortcuts.app
+    /// for the user to approve importing (one click each - Apple requires that regardless
+    /// of how the file is delivered).
+    private func createDoNotDisturbShortcuts() {
+        isCreatingShortcuts = true
+        shortcutInstallError = nil
+        let onName = settings.doNotDisturbOnShortcutName
+        let offName = settings.doNotDisturbOffShortcutName
+
+        Task {
+            do {
+                try await shortcutInstaller.installShortcuts(onName: onName, offName: offName)
+            } catch {
+                shortcutInstallError = error.localizedDescription
+            }
+            isCreatingShortcuts = false
         }
     }
 }
@@ -773,5 +859,11 @@ struct AboutSection: View {
 // MARK: - Preview
 
 #Preview {
-    SettingsView(settings: SettingsStore(), updaterService: UpdaterService(), permissionService: PermissionService(), chorusSession: ChorusSessionService())
+    SettingsView(
+        settings: SettingsStore(),
+        updaterService: UpdaterService(),
+        permissionService: PermissionService(),
+        chorusSession: ChorusSessionService(),
+        slackSession: SlackSessionService()
+    )
 }

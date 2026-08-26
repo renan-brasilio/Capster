@@ -185,7 +185,11 @@ struct PostProcessingCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: expectedOutput) }
 
         var receivedFileURL: URL?
-        let uploadStub = RecordingUploadStub { url in receivedFileURL = url }
+        var receivedTitle: String?
+        let uploadStub = RecordingUploadStub(
+            onUpload: { url in receivedFileURL = url },
+            onSetTitle: { title in receivedTitle = title }
+        )
         let uploadService = ChorusUploadService(session: uploadStub)
         let transcodeService = HandBrakeTranscodeService(processRunner: SucceedingTranscodeRunner(outputURL: expectedOutput))
         let notifications = NotificationService(settings: settings)
@@ -205,7 +209,10 @@ struct PostProcessingCoordinatorTests {
 
         #expect(coordinator.transcodeState == .succeeded)
         #expect(FileManager.default.fileExists(atPath: expectedOutput.path(percentEncoded: false)) == true)
+        // The uploaded file is the transcoded one (with the suffix)...
         #expect(receivedFileURL?.lastPathComponent == "\(newName) (Transcoded).mp4")
+        // ...but the title Chorus shows should stay the clean recording name.
+        #expect(receivedTitle == newName)
     }
 
     @Test func skippingTheRenamePromptUploadsUnderTheOriginalName() async throws {
@@ -256,21 +263,38 @@ private final class SucceedingTranscodeRunner: ProcessRunning {
 /// still exercising the real request-building code.
 private final class RecordingUploadStub: HTTPUploading {
     private let onUpload: (URL) -> Void
+    private let onSetTitle: (String) -> Void
 
-    init(onUpload: @escaping (URL) -> Void) {
+    init(onUpload: @escaping (URL) -> Void, onSetTitle: @escaping (String) -> Void = { _ in }) {
         self.onUpload = onUpload
+        self.onSetTitle = onSetTitle
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        if let body = request.httpBody,
-           let bodyString = String(data: body, encoding: .utf8),
-           let filenameRange = bodyString.range(of: "filename=\"") {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+
+        guard let body = request.httpBody, let bodyString = String(data: body, encoding: .utf8) else {
+            return (Data("{}".utf8), response)
+        }
+
+        if let filenameRange = bodyString.range(of: "filename=\"") {
             let rest = bodyString[filenameRange.upperBound...]
             if let endQuote = rest.firstIndex(of: "\"") {
                 onUpload(URL(fileURLWithPath: String(rest[..<endQuote])))
             }
+            // The real upload step's response is decoded strictly (callid/success), unlike
+            // the later steps - a bare "{}" here would make the whole pipeline fail before
+            // ever reaching associate/setTitle/access, regardless of what this test cares about.
+            return (Data(#"{"callid": "TEST123", "success": true}"#.utf8), response)
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+
+        // The setTitle step posts to .../v2/ with a form-encoded "value=<title>" pair.
+        if request.url?.absoluteString == "https://chorus.ai/api/recording/v2/",
+           let valueRange = bodyString.range(of: "value=") {
+            let rawValue = bodyString[valueRange.upperBound...].split(separator: "&").first.map(String.init) ?? ""
+            onSetTitle(rawValue.removingPercentEncoding ?? rawValue)
+        }
+
         return (Data("{}".utf8), response)
     }
 }

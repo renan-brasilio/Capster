@@ -100,12 +100,30 @@ final class RecorderViewModel {
     let notificationService: NotificationService
     let permissionService: PermissionService
     let chorusSession: ChorusSessionService
+    let slackSession: SlackSessionService
     let postProcessing: PostProcessingCoordinator
     private let captureEngine: CaptureEngine
     private let assetWriter: AssetWriter
     private let cameraSession = CameraSession()
     private let doNotDisturbService = DoNotDisturbService()
+    private let slackStatusService = SlackStatusService()
     private let postProcessingPanel = PostProcessingPanelCoordinator()
+
+    /// The Slack status captured right before recording started, so it can be restored
+    /// afterward instead of just clearing it to blank.
+    private var previousSlackStatus: SlackStatusService.PreviousStatus?
+
+    /// Whether Slack Do Not Disturb was already snoozed before the recording started -
+    /// if so, `revertRecordingSideEffects()` leaves it on rather than ending a snooze the
+    /// recording didn't start. `nil` means "not checked yet" (recording hasn't started
+    /// with the feature enabled); defaults to treating an unchecked/failed lookup as
+    /// already-on, so a recording never risks turning off someone else's DND.
+    private var slackDoNotDisturbWasAlreadyOn = true
+
+    /// Slack's `dnd.setSnooze` requires a fixed duration rather than "until I say so" -
+    /// this is generously long since `revertRecordingSideEffects()` always explicitly
+    /// ends the snooze anyway, unless it was already on beforehand.
+    private static let slackDoNotDisturbMinutes = 480
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "RecorderViewModel")
 
@@ -131,6 +149,7 @@ final class RecorderViewModel {
         self.notificationService = NotificationService(settings: settings)
         self.permissionService = PermissionService()
         self.chorusSession = ChorusSessionService()
+        self.slackSession = SlackSessionService()
         self.postProcessing = PostProcessingCoordinator(settings: settings, notificationService: notificationService, chorusSession: chorusSession)
         self.captureEngine = CaptureEngine()
         self.assetWriter = AssetWriter()
@@ -285,15 +304,7 @@ final class RecorderViewModel {
 
             logger.info("Starting recording sequence...")
 
-            // Sent as early as possible so the pause has time to actually take effect
-            // before capture (and its audio track) starts below.
-            if settings.pauseMusicOnRecordStartEnabled {
-                MediaKeyService.togglePlayPause()
-            }
-
-            if settings.doNotDisturbEnabled {
-                await doNotDisturbService.enable(shortcutName: settings.doNotDisturbOnShortcutName)
-            }
+            await applyRecordingSideEffects()
 
             // Stop any active live preview before starting recording
             logger.info("Stopping any active live preview...")
@@ -390,11 +401,9 @@ final class RecorderViewModel {
             assetWriter.cancel()
             settings.stopAccessingOutputDirectory()
 
-            // Undo the Do Not Disturb enabled above - a failed start shouldn't leave it on
-            // with no recording actually happening.
-            if settings.doNotDisturbEnabled {
-                await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
-            }
+            // Undo what applyRecordingSideEffects() did above - a failed start shouldn't
+            // leave Do Not Disturb/Slack status on with no recording actually happening.
+            await revertRecordingSideEffects()
 
             // lastError has no UI representation, so every start failure has to be surfaced
             // as a notification - otherwise the record button silently does nothing.
@@ -441,9 +450,7 @@ final class RecorderViewModel {
             logger.info("Recording stopped and saved to: \(outputURL.lastPathComponent)")
             NSSound(named: "Pop")?.play()
 
-            if settings.doNotDisturbEnabled {
-                await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
-            }
+            await revertRecordingSideEffects()
 
             if settings.openFolderAfterRecording {
                 NSWorkspace.shared.selectFile(outputURL.path(percentEncoded: false), inFileViewerRootedAtPath: outputURL.deletingLastPathComponent().path(percentEncoded: false))
@@ -480,9 +487,7 @@ final class RecorderViewModel {
             notificationService.sendRecordingFailedNotification(error: error)
             logger.error("Failed to stop recording: \(error.localizedDescription)")
 
-            if settings.doNotDisturbEnabled {
-                await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
-            }
+            await revertRecordingSideEffects()
         }
     }
 
@@ -515,9 +520,7 @@ final class RecorderViewModel {
         state = .idle
         recordingDuration = 0
 
-        if settings.doNotDisturbEnabled {
-            await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
-        }
+        await revertRecordingSideEffects()
 
         logger.info("Recording cancelled and discarded")
     }
@@ -528,6 +531,67 @@ final class RecorderViewModel {
         guard isRecording else { return }
         await cancelRecording()
         await startRecording()
+    }
+
+    /// Enables everything a recording asks for outside the app itself (macOS Do Not
+    /// Disturb, Slack status/Do Not Disturb) - called once at the very start of
+    /// `startRecording()`, before capture begins.
+    private func applyRecordingSideEffects() async {
+        if settings.doNotDisturbEnabled {
+            let succeeded = await doNotDisturbService.enable(shortcutName: settings.doNotDisturbOnShortcutName)
+            if !succeeded {
+                notificationService.sendDoNotDisturbShortcutFailedNotification(shortcutName: settings.doNotDisturbOnShortcutName)
+            }
+        }
+
+        guard let accessToken = slackSession.accessToken else { return }
+
+        if settings.slackStatusEnabled {
+            previousSlackStatus = await slackStatusService.fetchCurrentStatus(accessToken: accessToken)
+            await slackStatusService.setStatus(
+                text: settings.slackStatusText, emoji: settings.slackStatusEmoji, accessToken: accessToken
+            )
+        }
+
+        if settings.slackDoNotDisturbEnabled {
+            let alreadyOn = await slackStatusService.fetchDoNotDisturbSnoozeActive(accessToken: accessToken) ?? true
+            slackDoNotDisturbWasAlreadyOn = alreadyOn
+            if !alreadyOn {
+                await slackStatusService.startDoNotDisturb(minutes: Self.slackDoNotDisturbMinutes, accessToken: accessToken)
+            }
+        }
+    }
+
+    /// Reverts everything `applyRecordingSideEffects()` did. Called from every path a
+    /// recording can end through (stopped, cancelled, or failed to start/stop) so nothing
+    /// is ever left on with no recording actually happening.
+    private func revertRecordingSideEffects() async {
+        if settings.doNotDisturbEnabled {
+            let succeeded = await doNotDisturbService.disable(shortcutName: settings.doNotDisturbOffShortcutName)
+            if !succeeded {
+                notificationService.sendDoNotDisturbShortcutFailedNotification(shortcutName: settings.doNotDisturbOffShortcutName)
+            }
+        }
+
+        guard let accessToken = slackSession.accessToken else { return }
+
+        if settings.slackStatusEnabled {
+            if let previous = previousSlackStatus {
+                await slackStatusService.setStatus(
+                    text: previous.text, emoji: previous.emoji, expiration: previous.expiration, accessToken: accessToken
+                )
+            } else {
+                await slackStatusService.setStatus(text: "", emoji: "", accessToken: accessToken)
+            }
+            previousSlackStatus = nil
+        }
+
+        if settings.slackDoNotDisturbEnabled {
+            if !slackDoNotDisturbWasAlreadyOn {
+                await slackStatusService.endDoNotDisturb(accessToken: accessToken)
+            }
+            slackDoNotDisturbWasAlreadyOn = true
+        }
     }
 
     /// Pauses or resumes the current recording.

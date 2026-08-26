@@ -9,35 +9,40 @@ import Foundation
 
 struct DoNotDisturbServiceTests {
 
-    @Test func enableRunsShortcutsWithTheGivenName() async throws {
+    @Test func enableRunsShortcutsWithTheGivenNameAndReportsSuccess() async throws {
         let runner = RecordingProcessRunner(exitCode: 0)
         let service = DoNotDisturbService(processRunner: runner)
 
-        await service.enable(shortcutName: "Capster DND On")
+        let succeeded = await service.enable(shortcutName: "Capster DND On")
 
+        #expect(succeeded == true)
         #expect(runner.executableURL?.path(percentEncoded: false) == "/usr/bin/shortcuts")
         #expect(runner.arguments == ["run", "Capster DND On"])
     }
 
-    @Test func disableRunsShortcutsWithTheGivenName() async throws {
+    @Test func disableRunsShortcutsWithTheGivenNameAndReportsSuccess() async throws {
         let runner = RecordingProcessRunner(exitCode: 0)
         let service = DoNotDisturbService(processRunner: runner)
 
-        await service.disable(shortcutName: "Capster DND Off")
+        let succeeded = await service.disable(shortcutName: "Capster DND Off")
 
+        #expect(succeeded == true)
         #expect(runner.arguments == ["run", "Capster DND Off"])
     }
 
     /// A missing shortcut (or any other failure) shouldn't throw or crash the caller -
-    /// there's no recording-blocking behavior to protect, just a log message.
-    @Test func nonZeroExitDoesNotThrow() async throws {
+    /// there's no recording-blocking behavior to protect - but does report failure so
+    /// the caller can surface it, rather than failing completely silently.
+    @Test func nonZeroExitDoesNotThrowAndReportsFailure() async throws {
         let service = DoNotDisturbService(processRunner: RecordingProcessRunner(exitCode: 1))
-        await service.enable(shortcutName: "Missing Shortcut")
+        let succeeded = await service.enable(shortcutName: "Missing Shortcut")
+        #expect(succeeded == false)
     }
 
-    @Test func thrownErrorDoesNotPropagate() async throws {
+    @Test func thrownErrorDoesNotPropagateAndReportsFailure() async throws {
         let service = DoNotDisturbService(processRunner: ThrowingProcessRunner())
-        await service.enable(shortcutName: "Capster DND On")
+        let succeeded = await service.enable(shortcutName: "Capster DND On")
+        #expect(succeeded == false)
     }
 }
 

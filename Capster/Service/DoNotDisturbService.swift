@@ -21,15 +21,19 @@ final class DoNotDisturbService {
         self.processRunner = processRunner
     }
 
-    func enable(shortcutName: String) async {
+    /// Returns whether the shortcut actually ran successfully, so the caller can surface
+    /// a visible failure - a missing/misnamed shortcut otherwise fails completely silently.
+    @discardableResult
+    func enable(shortcutName: String) async -> Bool {
         await run(shortcutName: shortcutName, action: "enabling")
     }
 
-    func disable(shortcutName: String) async {
+    @discardableResult
+    func disable(shortcutName: String) async -> Bool {
         await run(shortcutName: shortcutName, action: "disabling")
     }
 
-    private func run(shortcutName: String, action: String) async {
+    private func run(shortcutName: String, action: String) async -> Bool {
         do {
             let exitCode = try await processRunner.run(
                 executableURL: URL(fileURLWithPath: "/usr/bin/shortcuts"),
@@ -38,9 +42,12 @@ final class DoNotDisturbService {
             )
             if exitCode != 0 {
                 logger.error("Shortcut \"\(shortcutName, privacy: .public)\" for \(action, privacy: .public) Do Not Disturb exited with code \(exitCode) - does a shortcut with that exact name exist in Shortcuts.app?")
+                return false
             }
+            return true
         } catch {
             logger.error("Failed to run shortcut \"\(shortcutName, privacy: .public)\" for \(action, privacy: .public) Do Not Disturb: \(error.localizedDescription)")
+            return false
         }
     }
 }

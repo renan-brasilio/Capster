@@ -297,19 +297,6 @@ final class SettingsStore {
         }
     }
 
-    /// Whether starting a recording sends the system Play/Pause media key first, so music
-    /// playing through the speakers doesn't get picked up in the recording.
-    var pauseMusicOnRecordStartEnabled: Bool {
-        get {
-            access(keyPath: \.pauseMusicOnRecordStartEnabled)
-            return defaults.bool(forKey: "pauseMusicOnRecordStartEnabled")
-        }
-        set {
-            withMutation(keyPath: \.pauseMusicOnRecordStartEnabled) {
-                defaults.set(newValue, forKey: "pauseMusicOnRecordStartEnabled")
-            }
-        }
-    }
 
     /// Whether Do Not Disturb is turned on for the duration of a recording, via the two
     /// user-created Shortcuts named by `doNotDisturbOnShortcutName`/`doNotDisturbOffShortcutName`.
@@ -987,6 +974,85 @@ final class SettingsStore {
     /// Clears the located ffmpeg binary.
     func resetFFmpeg() {
         ffmpegBookmark = nil
+    }
+
+    // MARK: - Slack Settings
+
+    /// Client ID of the Slack App used for the OAuth sign-in flow. Not secret - the
+    /// matching Client Secret is stored in the Keychain via `SlackSessionService`.
+    var slackClientID: String {
+        get {
+            access(keyPath: \.slackClientID)
+            return defaults.string(forKey: "slackClientID") ?? ""
+        }
+        set {
+            withMutation(keyPath: \.slackClientID) {
+                defaults.set(newValue, forKey: "slackClientID")
+            }
+        }
+    }
+
+    /// Whether a custom Slack status is set while recording, restored to whatever it was
+    /// beforehand once the recording stops.
+    var slackStatusEnabled: Bool {
+        get {
+            access(keyPath: \.slackStatusEnabled)
+            return defaults.bool(forKey: "slackStatusEnabled")
+        }
+        set {
+            withMutation(keyPath: \.slackStatusEnabled) {
+                defaults.set(newValue, forKey: "slackStatusEnabled")
+            }
+        }
+    }
+
+    /// Whether Slack's own Do Not Disturb (separate from macOS's) is snoozed while
+    /// recording, and un-snoozed once it stops.
+    var slackDoNotDisturbEnabled: Bool {
+        get {
+            access(keyPath: \.slackDoNotDisturbEnabled)
+            return defaults.bool(forKey: "slackDoNotDisturbEnabled")
+        }
+        set {
+            withMutation(keyPath: \.slackDoNotDisturbEnabled) {
+                defaults.set(newValue, forKey: "slackDoNotDisturbEnabled")
+            }
+        }
+    }
+
+    static let defaultSlackStatusText = "Recording a video for documentation; Answers will be delayed"
+    static let defaultSlackStatusEmoji = ":black_circle_for_record:"
+
+    /// Slack status text shown while recording.
+    var slackStatusText: String {
+        get {
+            access(keyPath: \.slackStatusText)
+            guard let stored = defaults.string(forKey: "slackStatusText"), !stored.isEmpty else {
+                return Self.defaultSlackStatusText
+            }
+            return stored
+        }
+        set {
+            withMutation(keyPath: \.slackStatusText) {
+                defaults.set(newValue, forKey: "slackStatusText")
+            }
+        }
+    }
+
+    /// Slack status emoji (as a `:colon_name:` code) shown while recording.
+    var slackStatusEmoji: String {
+        get {
+            access(keyPath: \.slackStatusEmoji)
+            guard let stored = defaults.string(forKey: "slackStatusEmoji"), !stored.isEmpty else {
+                return Self.defaultSlackStatusEmoji
+            }
+            return stored
+        }
+        set {
+            withMutation(keyPath: \.slackStatusEmoji) {
+                defaults.set(newValue, forKey: "slackStatusEmoji")
+            }
+        }
     }
 
     // MARK: - Private Storage

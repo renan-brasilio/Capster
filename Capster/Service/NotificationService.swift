@@ -240,6 +240,22 @@ final class NotificationService: NSObject {
         )
     }
 
+    func sendDoNotDisturbShortcutFailedNotification(shortcutName: String) {
+        send(
+            title: "Do Not Disturb Shortcut Not Found",
+            body: "Couldn't run the \"\(shortcutName)\" shortcut. Create it in Shortcuts.app with a \"Set Focus\" action, or fix the name in Settings > Recording.",
+            category: NotificationIdentifier.categoryPostProcessingFailed
+        )
+    }
+
+    func sendSlackSignInFailedNotification(error: Error) {
+        send(
+            title: "Slack Sign-In Failed",
+            body: error.localizedDescription,
+            category: NotificationIdentifier.categoryPostProcessingFailed
+        )
+    }
+
     func sendUploadStartedNotification(fileURL: URL) {
         send(
             title: "Uploading to Chorus",
