@@ -434,6 +434,10 @@ struct AutomationSettingsView: View {
                     .disabled(!settings.chorusUploadEnabled)
                     .help("Private recordings in Chorus are only visible to you and limit certain features. Turn off to make uploads visible to your team.")
 
+                Toggle("Ask for a Name Before Uploading", isOn: $settings.chorusRenameBeforeUploadEnabled)
+                    .disabled(!settings.chorusUploadEnabled)
+                    .help("Pauses before uploading so you can rename the recording. The name is applied to the file itself, so it's also what Chorus shows as the recording's title.")
+
                 LabeledContent("Chorus Account") {
                     HStack {
                         Text(chorusSession.isSignedIn ? "Signed in" : "Not signed in")

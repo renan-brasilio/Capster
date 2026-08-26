@@ -774,6 +774,20 @@ final class SettingsStore {
         }
     }
 
+    /// Whether the pipeline pauses before uploading to let the user rename the recording.
+    /// The rename is applied to the file on disk, so the name Chorus shows matches exactly.
+    var chorusRenameBeforeUploadEnabled: Bool {
+        get {
+            access(keyPath: \.chorusRenameBeforeUploadEnabled)
+            return defaults.bool(forKey: "chorusRenameBeforeUploadEnabled")
+        }
+        set {
+            withMutation(keyPath: \.chorusRenameBeforeUploadEnabled) {
+                defaults.set(newValue, forKey: "chorusRenameBeforeUploadEnabled")
+            }
+        }
+    }
+
     /// Whether a GIF is exported from the (possibly transcoded) recording via ffmpeg.
     var gifExportEnabled: Bool {
         get {

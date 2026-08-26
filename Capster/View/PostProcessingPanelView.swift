@@ -21,7 +21,11 @@ struct PostProcessingPanelView: View {
                 if coordinator.gifExportState != .notNeeded {
                     StepRow(title: "Export GIF", state: coordinator.gifExportState)
                 }
-                if coordinator.uploadState != .notNeeded {
+                if let prompt = coordinator.renamePrompt {
+                    RenameRow(prompt: prompt) { newName in
+                        coordinator.submitRename(newName)
+                    }
+                } else if coordinator.uploadState != .notNeeded {
                     StepRow(title: "Upload to Chorus", state: coordinator.uploadState)
                 }
             }
@@ -53,6 +57,40 @@ struct PostProcessingPanelView: View {
             try? await Task.sleep(for: .seconds(4))
             if coordinator.isFinished, coordinator.didSucceed {
                 onDismiss()
+            }
+        }
+    }
+}
+
+/// Pauses the "Upload to Chorus" step to let the user rename the recording. The name
+/// entered here is applied to the file on disk, so it's also what Chorus shows as the
+/// recording's title - Chorus derives it from the uploaded file's name.
+private struct RenameRow: View {
+    let prompt: PostProcessingCoordinator.RenamePrompt
+    let onSubmit: (String?) -> Void
+
+    @State private var name: String
+
+    init(prompt: PostProcessingCoordinator.RenamePrompt, onSubmit: @escaping (String?) -> Void) {
+        self.prompt = prompt
+        self.onSubmit = onSubmit
+        _name = State(initialValue: prompt.suggestedName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Upload to Chorus")
+                .font(.headline)
+
+            TextField("Recording Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { onSubmit(name) }
+
+            HStack {
+                Spacer()
+                Button("Skip") { onSubmit(nil) }
+                Button("Upload") { onSubmit(name) }
+                    .keyboardShortcut(.defaultAction)
             }
         }
     }

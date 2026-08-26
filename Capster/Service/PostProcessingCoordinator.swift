@@ -24,10 +24,17 @@ final class PostProcessingCoordinator {
         case failed(String)
     }
 
+    /// A pending "rename before upload" prompt, shown by the status panel. Non-nil only
+    /// while the upload step is paused waiting for `submitRename(_:)`.
+    struct RenamePrompt: Equatable {
+        let suggestedName: String
+    }
+
     private(set) var transcodeState: StepState = .notNeeded
     private(set) var gifExportState: StepState = .notNeeded
     private(set) var uploadState: StepState = .notNeeded
     private(set) var chorusCallID: String?
+    private(set) var renamePrompt: RenamePrompt?
 
     var isRunning: Bool {
         switch (transcodeState, gifExportState, uploadState) {
@@ -59,6 +66,7 @@ final class PostProcessingCoordinator {
     private let chorusSession: ChorusSessionService
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "PostProcessingCoordinator")
     private var currentTask: Task<Void, Never>?
+    private var renameContinuation: CheckedContinuation<String?, Never>?
 
     init(
         settings: SettingsStore,
@@ -95,6 +103,20 @@ final class PostProcessingCoordinator {
     /// Cancels any in-flight pipeline (e.g. the user closed the status panel mid-run).
     func cancel() {
         currentTask?.cancel()
+        resumeRename(with: nil)
+    }
+
+    /// Resolves a pending rename prompt from the status panel. `newName` is the desired
+    /// base filename (without extension); pass `nil` to keep the current name and proceed.
+    func submitRename(_ newName: String?) {
+        resumeRename(with: newName)
+    }
+
+    private func resumeRename(with newName: String?) {
+        guard let renameContinuation else { return }
+        self.renameContinuation = nil
+        renamePrompt = nil
+        renameContinuation.resume(returning: newName)
     }
 
     /// Awaits completion of the current run, for deterministic test assertions.
@@ -202,7 +224,18 @@ final class PostProcessingCoordinator {
         }
     }
 
-    private func runUpload(fileURL: URL) async {
+    private func runUpload(fileURL initialFileURL: URL) async {
+        var fileURL = initialFileURL
+
+        if settings.chorusRenameBeforeUploadEnabled {
+            let suggestedName = fileURL.deletingPathExtension().lastPathComponent
+            if let newName = await requestRename(suggestedName: suggestedName) {
+                fileURL = renamedFile(at: fileURL, toBaseName: newName) ?? fileURL
+            }
+        }
+
+        if Task.isCancelled { return }
+
         uploadState = .running(progressText: "Uploading…", fraction: nil)
         notificationService.sendUploadStartedNotification(fileURL: fileURL)
 
@@ -225,6 +258,48 @@ final class PostProcessingCoordinator {
             uploadState = .failed(error.localizedDescription)
             notificationService.sendUploadFailedNotification(error: error)
             logger.error("Upload failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Suspends until the status panel calls `submitRename(_:)`, surfacing `renamePrompt`
+    /// for it to display in the meantime.
+    private func requestRename(suggestedName: String) async -> String? {
+        await withCheckedContinuation { continuation in
+            renameContinuation = continuation
+            renamePrompt = RenamePrompt(suggestedName: suggestedName)
+        }
+    }
+
+    /// Renames `fileURL` on disk to `baseName` (its extension is preserved), resolving a
+    /// name collision by appending a numeric suffix. Returns `nil` - leaving the original
+    /// file in place - if `baseName` sanitizes to empty, matches the current name, or the
+    /// move fails.
+    private func renamedFile(at fileURL: URL, toBaseName baseName: String) -> URL? {
+        let sanitized = baseName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitized.isEmpty, sanitized != fileURL.deletingPathExtension().lastPathComponent else { return nil }
+
+        let directory = fileURL.deletingLastPathComponent()
+        let ext = fileURL.pathExtension
+        func candidateURL(_ name: String) -> URL {
+            directory.appending(path: ext.isEmpty ? name : "\(name).\(ext)")
+        }
+
+        var candidate = candidateURL(sanitized)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: candidate.path(percentEncoded: false)) {
+            candidate = candidateURL("\(sanitized) \(suffix)")
+            suffix += 1
+        }
+
+        do {
+            try FileManager.default.moveItem(at: fileURL, to: candidate)
+            return candidate
+        } catch {
+            logger.error("Failed to rename recording before Chorus upload: \(error.localizedDescription)")
+            return nil
         }
     }
 

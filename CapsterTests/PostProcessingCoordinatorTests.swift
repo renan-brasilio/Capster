@@ -131,6 +131,64 @@ struct PostProcessingCoordinatorTests {
 
         #expect(FileManager.default.fileExists(atPath: input.path(percentEncoded: false)) == true)
     }
+
+    @Test func renamePromptRenamesFileOnDiskAndUploadsUnderNewName() async throws {
+        let settings = makeSettings()
+        settings.chorusUploadEnabled = true
+        settings.chorusRenameBeforeUploadEnabled = true
+
+        var receivedFileURL: URL?
+        let uploadStub = RecordingUploadStub { url in receivedFileURL = url }
+        let uploadService = ChorusUploadService(session: uploadStub)
+        let notifications = NotificationService(settings: settings)
+        let coordinator = PostProcessingCoordinator(
+            settings: settings,
+            notificationService: notifications,
+            chorusSession: makeSignedInChorusSession(),
+            uploadService: uploadService
+        )
+
+        let input = recordingURL()
+        coordinator.start(recordingURL: input)
+
+        while coordinator.renamePrompt == nil { await Task.yield() }
+        coordinator.submitRename("Client Demo")
+        await coordinator.waitUntilFinished()
+
+        #expect(receivedFileURL?.lastPathComponent == "Client Demo.mp4")
+        #expect(FileManager.default.fileExists(atPath: input.path(percentEncoded: false)) == false)
+
+        let renamedURL = input.deletingLastPathComponent().appending(path: "Client Demo.mp4")
+        defer { try? FileManager.default.removeItem(at: renamedURL) }
+        #expect(FileManager.default.fileExists(atPath: renamedURL.path(percentEncoded: false)) == true)
+    }
+
+    @Test func skippingTheRenamePromptUploadsUnderTheOriginalName() async throws {
+        let settings = makeSettings()
+        settings.chorusUploadEnabled = true
+        settings.chorusRenameBeforeUploadEnabled = true
+
+        var receivedFileURL: URL?
+        let uploadStub = RecordingUploadStub { url in receivedFileURL = url }
+        let uploadService = ChorusUploadService(session: uploadStub)
+        let notifications = NotificationService(settings: settings)
+        let coordinator = PostProcessingCoordinator(
+            settings: settings,
+            notificationService: notifications,
+            chorusSession: makeSignedInChorusSession(),
+            uploadService: uploadService
+        )
+
+        let input = recordingURL()
+        defer { try? FileManager.default.removeItem(at: input) }
+        coordinator.start(recordingURL: input)
+
+        while coordinator.renamePrompt == nil { await Task.yield() }
+        coordinator.submitRename(nil)
+        await coordinator.waitUntilFinished()
+
+        #expect(receivedFileURL?.lastPathComponent == input.lastPathComponent)
+    }
 }
 
 /// Stubs a successful HandBrakeCLI run by writing the expected output file, mirroring
