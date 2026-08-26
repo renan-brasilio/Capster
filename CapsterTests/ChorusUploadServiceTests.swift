@@ -101,6 +101,24 @@ struct ChorusUploadServiceTests {
         #expect(stub.requests.count == 4)
     }
 
+    /// A 500 on the access step specifically has also been observed during the same
+    /// "still settling" window as the 404 case above, so it gets the same retry treatment.
+    @Test func accessStep500IsRetriedUntilItSucceeds() async throws {
+        let uploadJSON = #"{"callid": "ABC123", "success": true}"#
+        let stub = QueuedHTTPUploading(results: [
+            .success((Data(uploadJSON.utf8), Self.response(status: 200))),
+            .success((Data(), Self.response(status: 200))), // associate
+            .success((Data(), Self.response(status: 500))), // access, retried...
+            .success((Data(), Self.response(status: 200)))  // ...until it succeeds
+        ])
+        let service = ChorusUploadService(session: stub)
+
+        let result = try await service.upload(fileURL: try tempFileWithData(), cookieHeader: "c", xsrfToken: "x", isPrivate: true)
+
+        #expect(result.callID == "ABC123")
+        #expect(stub.requests.count == 4)
+    }
+
     @Test func uploadStepSuccessFalseThrowsUnexpectedResponse() async throws {
         let json = #"{"callid": "ABC123", "success": false}"#
         let stub = QueuedHTTPUploading(results: [

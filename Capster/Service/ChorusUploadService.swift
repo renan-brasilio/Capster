@@ -142,7 +142,9 @@ final class ChorusUploadService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["is_private": isPrivate])
 
-        let data = try await performExpectingSuccess(request, step: "access", retryOn404Count: 4)
+        // Also retries a 500 here (unlike the other steps) - observed in practice on this
+        // endpoint specifically, with the same "still settling" timing as the 404 case below.
+        let data = try await performExpectingSuccess(request, step: "access", retryCount: 4, retryableStatusCodes: [404, 500])
         logger.info("Chorus access step response: \(String(data: data, encoding: .utf8) ?? "<empty>", privacy: .public)")
     }
 
@@ -161,7 +163,7 @@ final class ChorusUploadService {
         ]
         request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
 
-        _ = try await performExpectingSuccess(request, step: "associate", retryOn404Count: 4)
+        _ = try await performExpectingSuccess(request, step: "associate", retryCount: 4)
     }
 
     // MARK: - Helpers
@@ -178,11 +180,17 @@ final class ChorusUploadService {
         request.setValue("2019-09-01", forHTTPHeaderField: "X-Al-Version")
     }
 
-    /// `retryOn404Count` retries a 404 with backoff before giving up - Chorus's backend
-    /// appears to need a moment after `/upload/` responds before the new `callid` is
-    /// queryable by the follow-up calls, which instantly 404 otherwise. The initial
-    /// upload step itself doesn't have this issue, so it passes 0 (no retry).
-    private func performExpectingSuccess(_ request: URLRequest, step: String, retryOn404Count: Int = 0) async throws -> Data {
+    /// `retryCount` retries a status in `retryableStatusCodes` with backoff before giving
+    /// up - Chorus's backend appears to need a moment after `/upload/` responds before the
+    /// new `callid` is queryable by the follow-up calls, which otherwise fail instantly
+    /// (404 on most steps; 500 has also been observed on the access step specifically). The
+    /// initial upload step itself doesn't have this issue, so it passes 0 (no retry).
+    private func performExpectingSuccess(
+        _ request: URLRequest,
+        step: String,
+        retryCount: Int = 0,
+        retryableStatusCodes: Set<Int> = [404]
+    ) async throws -> Data {
         var attempt = 0
 
         while true {
@@ -199,9 +207,9 @@ final class ChorusUploadService {
                 return data
             }
 
-            if statusCode == 404, attempt < retryOn404Count {
+            if retryableStatusCodes.contains(statusCode), attempt < retryCount {
                 attempt += 1
-                logger.info("Chorus \(step, privacy: .public) 404'd, retrying (\(attempt)/\(retryOn404Count)) - likely still processing the upload")
+                logger.info("Chorus \(step, privacy: .public) returned HTTP \(statusCode), retrying (\(attempt)/\(retryCount)) - likely still processing the upload")
                 try? await Task.sleep(for: .seconds(Double(attempt)))
                 continue
             }
