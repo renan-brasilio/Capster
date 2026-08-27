@@ -268,6 +268,23 @@ final class SettingsStore {
         self.keychain = keychain
     }
 
+    // MARK: - Appearance Settings
+
+    /// Whether Capster shows a Dock icon (and appears in the Cmd+Tab switcher) while
+    /// running. Capster is an `LSUIElement` accessory app by default (menu bar only) -
+    /// this overrides that at runtime via `NSApp.setActivationPolicy(_:)`.
+    var showDockIcon: Bool {
+        get {
+            access(keyPath: \.showDockIcon)
+            return defaults.bool(forKey: "showDockIcon")
+        }
+        set {
+            withMutation(keyPath: \.showDockIcon) {
+                defaults.set(newValue, forKey: "showDockIcon")
+            }
+        }
+    }
+
     // MARK: - Recording Behavior Settings
 
     /// Whether a 3-second countdown overlay is shown before a recording actually starts.

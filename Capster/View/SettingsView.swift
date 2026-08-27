@@ -697,6 +697,11 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Toggle("Show Icon in Dock", isOn: $settings.showDockIcon)
+                    .help("Capster normally only lives in the menu bar. Turning this on also shows its icon in the Dock (and Cmd+Tab switcher) while it's running.")
+            }
+
             Section("Output Location") {
                 LabeledContent {
                     HStack {

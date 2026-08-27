@@ -28,6 +28,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onOpenURLs?(urls)
     }
 
+    /// Overriding `LSUIElement`'s default (menu bar only, no Dock icon) has to happen here
+    /// rather than from a SwiftUI `.task` - a `.task` on the `MenuBarExtra` content can run
+    /// before AppKit finishes its own Info.plist-driven activation policy setup, so an
+    /// early `setActivationPolicy` call gets silently overwritten a moment later. This
+    /// delegate callback fires at the correct point in the launch sequence.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        applyDockIconPolicy()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(userDefaultsDidChange), name: UserDefaults.didChangeNotification, object: nil
+        )
+    }
+
+    @objc private func userDefaultsDidChange() {
+        applyDockIconPolicy()
+    }
+
+    private func applyDockIconPolicy() {
+        let showDockIcon = UserDefaults.standard.bool(forKey: "showDockIcon")
+        if NSApp.activationPolicy() != (showDockIcon ? .regular : .accessory) {
+            NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+        }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let viewModel, viewModel.isRecording || viewModel.hasContentSelected else {
             return .terminateNow

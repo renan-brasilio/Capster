@@ -44,6 +44,10 @@ struct HandBrakeProgress: Equatable {
     let fractionComplete: Double
     /// Raw text of the most recent progress line, for a status label.
     let statusText: String
+    /// Seconds remaining, parsed from the line's own `ETA HHhMMmSSs` suffix - `nil` early
+    /// in a transcode, since HandBrakeCLI only starts reporting an ETA once its rolling fps
+    /// average has settled (the first several progress lines are bare percentages).
+    let etaSeconds: TimeInterval?
 }
 
 /// Abstracts subprocess launching so tests can stub HandBrakeCLI invocation without
@@ -194,8 +198,10 @@ final class HandBrakeTranscodeService {
             .appending(path: "\(base) (Transcoded).\(ext)")
     }
 
-    /// Parses lines like "Encoding: task 1 of 1, 42.17 %" into `HandBrakeProgress`.
-    /// Returns nil for non-progress lines (muxing, scanning, etc.).
+    /// Parses lines like "Encoding: task 1 of 1, 42.17 %" (and, once HandBrakeCLI's fps
+    /// average has settled, "Encoding: task 1 of 1, 51.17 % (174.12 fps, avg 174.12 fps,
+    /// ETA 00h00m07s)") into `HandBrakeProgress`. Returns nil for non-progress lines
+    /// (muxing, scanning, etc.).
     static func parseProgress(from line: String) -> HandBrakeProgress? {
         guard line.contains("Encoding:"), let percentRange = line.range(of: "%") else { return nil }
         let beforePercent = line[..<percentRange.lowerBound]
@@ -203,6 +209,28 @@ final class HandBrakeTranscodeService {
         let numberText = beforePercent[beforePercent.index(after: lastComma)...]
             .trimmingCharacters(in: .whitespaces)
         guard let percent = Double(numberText) else { return nil }
-        return HandBrakeProgress(fractionComplete: percent / 100, statusText: line.trimmingCharacters(in: .whitespaces))
+        return HandBrakeProgress(
+            fractionComplete: percent / 100,
+            statusText: line.trimmingCharacters(in: .whitespaces),
+            etaSeconds: parseETASeconds(from: line)
+        )
+    }
+
+    /// Parses the "ETA 00h00m07s" suffix HandBrakeCLI appends once it has one. Returns nil
+    /// if the line has no ETA yet, or the digits after "ETA " don't match that exact shape.
+    private static func parseETASeconds(from line: String) -> TimeInterval? {
+        guard let etaRange = line.range(of: "ETA ") else { return nil }
+        let etaText = line[etaRange.upperBound...]
+
+        guard let hRange = etaText.range(of: "h"), let mRange = etaText.range(of: "m"), let sRange = etaText.range(of: "s") else {
+            return nil
+        }
+        guard let hours = Double(etaText[etaText.startIndex..<hRange.lowerBound]),
+              let minutes = Double(etaText[hRange.upperBound..<mRange.lowerBound]),
+              let seconds = Double(etaText[mRange.upperBound..<sRange.lowerBound]) else {
+            return nil
+        }
+
+        return hours * 3600 + minutes * 60 + seconds
     }
 }

@@ -195,7 +195,7 @@ final class PostProcessingCoordinator {
                 binaryURL: binaryURL
             ) { [weak self] progress in
                 Task { @MainActor in
-                    self?.transcodeState = .running(progressText: progress.statusText, fraction: progress.fractionComplete)
+                    self?.transcodeState = .running(progressText: Self.transcodeProgressText(for: progress), fraction: progress.fractionComplete)
                 }
             }
             transcodeState = .succeeded
@@ -324,6 +324,17 @@ final class PostProcessingCoordinator {
             logger.error("Failed to rename recording before Chorus upload: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    /// A compact "42% - 0:32 remaining" label - HandBrakeCLI's own progress line (used
+    /// directly as the status text before this) is a long fps/ETA string that the panel's
+    /// single-line, middle-truncated display cut off, hiding the ETA it contained.
+    private static func transcodeProgressText(for progress: HandBrakeProgress) -> String {
+        let percent = Int((progress.fractionComplete * 100).rounded())
+        guard let etaSeconds = progress.etaSeconds else {
+            return "\(percent)%"
+        }
+        return "\(percent)% - \(RecorderViewModel.formatDuration(etaSeconds)) remaining"
     }
 
     private func isCase(_ state: StepState, _ pattern: StepState) -> Bool {

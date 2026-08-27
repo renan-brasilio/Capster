@@ -66,11 +66,31 @@ struct HandBrakeTranscodeServiceTests {
     @Test func parsesValidProgressLine() {
         let progress = HandBrakeTranscodeService.parseProgress(from: "Encoding: task 1 of 1, 42.17 %")
         #expect(progress?.fractionComplete == 0.4217)
+        #expect(progress?.etaSeconds == nil)
     }
 
     @Test func ignoresNonProgressLines() {
         #expect(HandBrakeTranscodeService.parseProgress(from: "Muxing: this may take awhile...") == nil)
         #expect(HandBrakeTranscodeService.parseProgress(from: "HandBrake has exited.") == nil)
+    }
+
+    /// Real line captured from an actual HandBrakeCLI run - it only starts appending the
+    /// fps/ETA suffix once its rolling average has settled, so earlier lines are bare
+    /// percentages (covered by `parsesValidProgressLine` above).
+    @Test func parsesETAOnceHandBrakeStartsReportingOne() {
+        let progress = HandBrakeTranscodeService.parseProgress(
+            from: "Encoding: task 1 of 1, 51.17 % (174.12 fps, avg 174.12 fps, ETA 00h00m07s)"
+        )
+        #expect(progress?.fractionComplete == 0.5117)
+        #expect(progress?.etaSeconds == 7)
+    }
+
+    @Test func parsesETAWithHoursAndMinutes() {
+        let progress = HandBrakeTranscodeService.parseProgress(
+            from: "Encoding: task 1 of 1, 12.00 % (10.00 fps, avg 10.00 fps, ETA 01h02m03s)"
+        )
+        let expectedSeconds: TimeInterval = 1 * 3600 + 2 * 60 + 3
+        #expect(progress?.etaSeconds == expectedSeconds)
     }
 }
 

@@ -371,9 +371,18 @@ final class RecorderViewModel {
                     await countdownOverlay.waitForPresenterOverlayEnable(on: screen)
                 }
 
+                // cancelRecording() resumes the wait above (and would resume the countdown
+                // below) so neither hangs forever if the user cancels mid-prepare-window -
+                // that's not the same as the user actually clicking Resume, so bail out
+                // here rather than blindly continuing into the countdown, or resuming a
+                // capture that cancelRecording() has already torn down.
+                guard isRecording else { return }
+
                 if settings.countdownEnabled, let screen {
                     await countdownOverlay.runCountdown(seconds: 3, on: screen)
                 }
+
+                guard isRecording else { return }
 
                 // Still paused here, so the cue is picked up by ScreenCaptureKit like any
                 // other system sound but dropped rather than written - waiting out its
@@ -382,6 +391,8 @@ final class RecorderViewModel {
                     sound.play()
                     try? await Task.sleep(for: .seconds(sound.duration))
                 }
+
+                guard isRecording else { return }
 
                 resumeInternal()
                 isPreparing = false
