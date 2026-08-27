@@ -40,6 +40,11 @@ final class PostProcessingCoordinator {
     private(set) var chorusCallID: String?
     private(set) var renamePrompt: RenamePrompt?
 
+    /// The recording this run started with - exposed so the status panel can offer an
+    /// "Edit Recording" action without needing its own copy of the URL threaded in
+    /// separately from `start(recordingURL:formattedDuration:)`.
+    private(set) var recordingURL: URL?
+
     var isRunning: Bool {
         switch (transcodeState, gifExportState, uploadState) {
         case (.queued, _, _), (.running, _, _),
@@ -53,6 +58,15 @@ final class PostProcessingCoordinator {
 
     var isFinished: Bool {
         !isRunning && (transcodeState != .notNeeded || gifExportState != .notNeeded || uploadState != .notNeeded)
+    }
+
+    /// Whether `start(recordingURL:formattedDuration:)` actually queued any step - `false`
+    /// right after a no-op `start()` call (nothing enabled in Settings), which callers
+    /// embedding the step list inline (rather than only showing it when non-empty, the way
+    /// the auto-popped status panel does by never calling `start()` at all in that case)
+    /// need to distinguish from "steps are still queued".
+    var hasAnySteps: Bool {
+        transcodeState != .notNeeded || gifExportState != .notNeeded || uploadState != .notNeeded
     }
 
     var didSucceed: Bool {
@@ -95,6 +109,7 @@ final class PostProcessingCoordinator {
         guard settings.handBrakeTranscodeEnabled || settings.gifExportEnabled || settings.chorusUploadEnabled else { return }
 
         currentTask?.cancel()
+        self.recordingURL = recordingURL
         transcodeState = settings.handBrakeTranscodeEnabled ? .queued : .notNeeded
         gifExportState = settings.gifExportEnabled ? .queued : .notNeeded
         uploadState = settings.chorusUploadEnabled ? .queued : .notNeeded

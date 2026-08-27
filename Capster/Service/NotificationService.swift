@@ -21,6 +21,7 @@ final class NotificationService: NSObject {
         static let categoryRecordingSaved = "RECORDING_SAVED"
         static let categoryRecordingFailed = "RECORDING_FAILED"
         static let actionShowInFinder = "SHOW_IN_FINDER"
+        static let actionEditRecording = "EDIT_RECORDING"
         static let categoryPostProcessing = "POST_PROCESSING"
         static let categoryPostProcessingFailed = "POST_PROCESSING_FAILED"
         static let categoryChorusUploadCompleted = "CHORUS_UPLOAD_COMPLETED"
@@ -29,6 +30,7 @@ final class NotificationService: NSObject {
 
     private enum UserInfoKey {
         static let folderURL = "folderURL"
+        static let recordingURL = "recordingURL"
         static let chorusLink = "chorusLink"
     }
 
@@ -39,6 +41,13 @@ final class NotificationService: NSObject {
         subsystem: Bundle.main.bundleIdentifier ?? "Capster",
         category: "NotificationService"
     )
+
+    /// Called with the recording's URL when the user taps "Edit Recording" on the
+    /// "Recording Saved" notification - this is the primary entry point for the editor's
+    /// optional branch, since it's the first moment after a recording finishes where the
+    /// user can choose "edit" instead of "quick post-process". Set by `RecorderViewModel`,
+    /// which owns the closure that actually opens the editor window.
+    var onEditRecordingRequested: ((URL) -> Void)?
 
     // MARK: - Initialization
 
@@ -64,10 +73,17 @@ final class NotificationService: NSObject {
             options: [.foreground]
         )
 
-        // Category for successful recording with action
+        // Action to open the just-finished recording in the post-recording editor
+        let editRecordingAction = UNNotificationAction(
+            identifier: NotificationIdentifier.actionEditRecording,
+            title: "Edit Recording",
+            options: [.foreground]
+        )
+
+        // Category for successful recording with actions
         let recordingSavedCategory = UNNotificationCategory(
             identifier: NotificationIdentifier.categoryRecordingSaved,
-            actions: [showInFinderAction],
+            actions: [showInFinderAction, editRecordingAction],
             intentIdentifiers: []
         )
 
@@ -138,7 +154,8 @@ final class NotificationService: NSObject {
             title: "Recording Saved",
             body: "Your recording has been saved to \(fileURL.lastPathComponent)",
             category: NotificationIdentifier.categoryRecordingSaved,
-            folderURL: fileURL.deletingLastPathComponent()
+            folderURL: fileURL.deletingLastPathComponent(),
+            recordingURL: fileURL
         )
     }
 
@@ -178,10 +195,12 @@ final class NotificationService: NSObject {
 
     /// Sends a notification when a `.capster` job file's recording can't be found -
     /// most likely moved, renamed, or deleted since the job file was created.
-    func sendPostProcessingSourceMissingNotification(fileURL: URL) {
+    /// Sends a notification when a `.capster` project file's recording can't be found -
+    /// most likely moved, renamed, or deleted since the project file was written.
+    func sendProjectSourceMissingNotification(fileURL: URL) {
         send(
             title: "Recording Not Found",
-            body: "Can't reopen post-processing - \"\(fileURL.lastPathComponent)\" is missing. It may have been moved, renamed, or deleted.",
+            body: "Can't open the editor - \"\(fileURL.lastPathComponent)\" is missing. It may have been moved, renamed, or deleted.",
             category: NotificationIdentifier.categoryRecordingFailed
         )
     }
@@ -320,16 +339,23 @@ final class NotificationService: NSObject {
     ///   - body: The notification body
     ///   - category: The category identifier determining the available actions
     ///   - folderURL: Folder to reveal when the notification is clicked, if any
-    private func send(title: String, body: String, category: String, folderURL: URL? = nil) {
+    ///   - recordingURL: Recording to open in the editor for the "Edit Recording" action, if any
+    private func send(title: String, body: String, category: String, folderURL: URL? = nil, recordingURL: URL? = nil) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
         content.categoryIdentifier = category
 
-        // Store the folder URL for opening when notification is clicked
+        var userInfo: [String: Any] = [:]
         if let folderURL {
-            content.userInfo = [UserInfoKey.folderURL: folderURL.path()]
+            userInfo[UserInfoKey.folderURL] = folderURL.path()
+        }
+        if let recordingURL {
+            userInfo[UserInfoKey.recordingURL] = recordingURL.path(percentEncoded: false)
+        }
+        if !userInfo.isEmpty {
+            content.userInfo = userInfo
         }
 
         let request = UNNotificationRequest(
@@ -387,6 +413,16 @@ extension NotificationService: UNUserNotificationCenterDelegate {
             if let folderPath = await userInfo[UserInfoKey.folderURL] as? String {
                 await MainActor.run {
                     openFolderInFinder(path: folderPath)
+                }
+            }
+
+        case NotificationIdentifier.actionEditRecording:
+            // User tapped "Edit Recording" - open it in the post-recording editor instead
+            // of running the quick post-processing pipeline.
+            if let recordingPath = await userInfo[UserInfoKey.recordingURL] as? String {
+                let recordingURL = URL(fileURLWithPath: recordingPath)
+                await MainActor.run {
+                    onEditRecordingRequested?(recordingURL)
                 }
             }
 

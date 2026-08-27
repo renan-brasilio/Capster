@@ -42,7 +42,9 @@ private final class CountdownPanel: NSPanel {
 /// A small, interactive floating panel for the "enable Presenter Overlay manually" prompt.
 /// Unlike `CountdownPanel`, this must accept clicks for its Resume button - and must NOT
 /// cover the whole screen, since the user needs to be able to click Control Center
-/// (top-right of the menu bar) while it's showing.
+/// (top-right of the menu bar) while it's showing. Shown together with
+/// `PresenterOverlayScrimPanel` for the same full-screen darkened backdrop the countdown
+/// uses, without this panel itself blocking clicks outside its own small bounds.
 private final class PresenterOverlayPromptPanel: NSPanel {
     init(contentRect: CGRect) {
         super.init(
@@ -54,13 +56,36 @@ private final class PresenterOverlayPromptPanel: NSPanel {
 
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isReleasedWhenClosed = false
     }
 
     override var canBecomeKey: Bool { true }
+}
+
+/// A full-screen darkened backdrop shown behind `PresenterOverlayPromptPanel`, matching
+/// `CountdownPanel`'s scrim so the two overlays read as the same visual family. Click-
+/// through (`ignoresMouseEvents = true`) so it never blocks Control Center or anything
+/// else on screen - only the small prompt panel on top of it is actually interactive.
+private final class PresenterOverlayScrimPanel: NSPanel {
+    init(screen: NSScreen) {
+        super.init(
+            contentRect: screen.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        isOpaque = false
+        backgroundColor = NSColor.black.withAlphaComponent(0.2)
+        hasShadow = false
+        level = .screenSaver
+        ignoresMouseEvents = true
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        isReleasedWhenClosed = false
+    }
 }
 
 /// Drives the number shown by the countdown overlay.
@@ -81,36 +106,29 @@ final class CountdownOverlay {
 
     private var countdownPanel: CountdownPanel?
     private var promptPanel: PresenterOverlayPromptPanel?
+    private var promptScrimPanel: PresenterOverlayScrimPanel?
     private var resumeContinuation: CheckedContinuation<Void, Never>?
     private var countdownTask: Task<Void, Never>?
 
     /// Shows a small prompt asking the user to enable Presenter Overlay via Control
-    /// Center, and suspends until they click Resume. Positioned so it never covers
-    /// Control Center itself.
+    /// Center, over the same full-screen darkened backdrop the countdown uses, and
+    /// suspends until they click Resume. The prompt itself stays small and positioned
+    /// clear of Control Center; the backdrop is click-through, so neither blocks it.
     func waitForPresenterOverlayEnable(on screen: NSScreen) async {
-        let width: CGFloat = 300
-        let height: CGFloat = 200
+        let scrim = PresenterOverlayScrimPanel(screen: screen)
+        scrim.makeKeyAndOrderFront(nil)
+        promptScrimPanel = scrim
+
+        let width: CGFloat = 340
+        let height: CGFloat = 260
         let origin = promptOrigin(width: width, height: height, screen: screen)
         let contentRect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
 
         let panel = PresenterOverlayPromptPanel(contentRect: contentRect)
-
-        let visualEffect = NSVisualEffectView(frame: .init(origin: .zero, size: contentRect.size))
-        visualEffect.material = .menu
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 14
-        visualEffect.layer?.masksToBounds = true
-
-        let hostingView = NSHostingView(rootView: PresenterOverlayPromptView { [weak self] in
+        panel.contentView = NSHostingView(rootView: PresenterOverlayPromptView { [weak self] in
             self?.resumeContinuation?.resume()
             self?.resumeContinuation = nil
         })
-        hostingView.frame = visualEffect.bounds
-        hostingView.autoresizingMask = [.width, .height]
-        visualEffect.addSubview(hostingView)
-        panel.contentView = visualEffect
 
         panel.makeKeyAndOrderFront(nil)
         promptPanel = panel
@@ -121,6 +139,8 @@ final class CountdownOverlay {
 
         panel.orderOut(nil)
         promptPanel = nil
+        scrim.orderOut(nil)
+        promptScrimPanel = nil
     }
 
     /// Shows the numeric countdown on the given screen and suspends until it finishes or
@@ -162,6 +182,8 @@ final class CountdownOverlay {
         resumeContinuation = nil
         promptPanel?.orderOut(nil)
         promptPanel = nil
+        promptScrimPanel?.orderOut(nil)
+        promptScrimPanel = nil
         countdownTask?.cancel()
         countdownTask = nil
         countdownPanel?.orderOut(nil)
@@ -217,17 +239,21 @@ private struct PresenterOverlayPromptView: View {
     let onResume: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             Image(systemName: "person.crop.rectangle.badge.exclamationmark")
-                .font(.system(size: 32))
-                .foregroundStyle(.orange)
+                .font(.system(size: 40))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.5), radius: 10)
 
             Text("Enable Presenter Overlay")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.5), radius: 10)
 
             Text("macOS doesn't allow apps to turn this on automatically. Open Control Center, enable Presenter Overlay, then click Resume.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.85))
+                .shadow(color: .black.opacity(0.5), radius: 8)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -235,8 +261,9 @@ private struct PresenterOverlayPromptView: View {
                 onResume()
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
-        .padding(20)
-        .frame(width: 300)
+        .padding(24)
+        .frame(width: 340)
     }
 }

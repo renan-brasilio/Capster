@@ -102,9 +102,8 @@ struct ChorusLoginView: NSViewRepresentable {
             popupWindow.title = "Sign in"
             // `.close()`'s fade-out animation racing the WKWebView's own teardown as
             // Google's popup closes itself is a reliable SIGSEGV
-            // (`_NSWindowTransformAnimation dealloc` mid-flight) - matches the
-            // `orderOut(nil)` convention already used elsewhere in this app
-            // (`PostProcessingPanelCoordinator`) for exactly this reason.
+            // (`_NSWindowTransformAnimation dealloc` mid-flight) - use `orderOut(nil)`
+            // instead for exactly this reason.
             popupWindow.animationBehavior = .none
             popupWindow.isReleasedWhenClosed = false
             popupWindow.contentView = popupWebView

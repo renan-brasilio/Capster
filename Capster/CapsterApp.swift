@@ -17,16 +17,26 @@ struct CapsterApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Capster", category: "CapsterApp")
 
+    init() {
+        // Wired here, in `init()`, rather than a `.task` on the `MenuBarExtra`'s content -
+        // that content (and the `.task` on it) is only actually built once the user opens
+        // the menu bar popover at least once, which isn't guaranteed to have happened yet
+        // when a `.capster` file or `capster://` URL needs handling right at launch (e.g.
+        // double-clicking a `.capster` project file launches the app fresh and hands it the
+        // open-URL event almost immediately). `init()` runs synchronously before any Scene
+        // content, so this is reliable regardless of menu bar state.
+        appDelegate.viewModel = viewModel
+        appDelegate.onOpenURLs = { [self] urls in
+            for url in urls { handleURL(url) }
+        }
+    }
+
     var body: some Scene {
         // Menu bar extra - the primary interface
         // Using .window style to support custom toggle switches
         MenuBarExtra {
             MenuBarView(viewModel: viewModel)
                 .task {
-                    appDelegate.viewModel = viewModel
-                    appDelegate.onOpenURLs = { urls in
-                        for url in urls { handleURL(url) }
-                    }
                     await viewModel.requestPermissionsOnLaunch()
                     registerKeyboardShortcuts()
                 }
@@ -52,15 +62,16 @@ struct CapsterApp: App {
 
     // MARK: - File Opens
 
-    /// A double-clicked `.capster` job file arrives here the same way a `capster://` URL
-    /// does - both go through `application(_:open:)`.
+    /// A double-clicked `.capster` project file arrives here the same way a `capster://`
+    /// URL does - both go through `application(_:open:)`. Opens the editor, resuming any
+    /// saved edits the project file holds.
     private func handleFileOpen(_ url: URL) {
-        guard let recordingURL = PostProcessingJobFile.read(from: url) else {
-            logger.error("Couldn't read post-processing job file: \(url.lastPathComponent, privacy: .public)")
+        guard let project = CapsterProjectFile.read(from: url) else {
+            logger.error("Couldn't read Capster project file: \(url.lastPathComponent, privacy: .public)")
             return
         }
-        logger.info("Reopening post-processing for: \(recordingURL.lastPathComponent, privacy: .public)")
-        viewModel.reopenPostProcessing(for: recordingURL)
+        logger.info("Opening editor for: \(project.originalRecordingURL.lastPathComponent, privacy: .public)")
+        viewModel.openEditor(for: project.originalRecordingURL)
     }
 
     // MARK: - URL Scheme

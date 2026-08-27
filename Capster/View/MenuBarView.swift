@@ -56,6 +56,7 @@ struct MenuBarView: View {
                     duration: viewModel.formattedDuration,
                     isPaused: viewModel.isPaused
                 ) {
+                    dismiss()
                     Task {
                         await viewModel.stopRecording()
                     }
@@ -177,6 +178,13 @@ struct MenuBarView: View {
             MenuBarDivider()
 
             // Bottom Actions
+            if let lastRecordingURL = viewModel.lastRecordingURL {
+                MenuBarActionButton(title: "Edit Last Recording", systemImage: "scissors") {
+                    dismiss()
+                    viewModel.editorWindowCoordinator.show(recordingURL: lastRecordingURL, postProcessing: viewModel.postProcessing)
+                }
+            }
+
             MenuBarActionButton(title: "Open Output Folder", systemImage: "folder") {
                 let settings = viewModel.settings
                 let didStart = settings.startAccessingOutputDirectory()

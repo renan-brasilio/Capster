@@ -51,8 +51,8 @@ struct PostProcessingPanelView: View {
                 Button("Close", action: onDismiss)
             }
         }
-        .padding(16)
-        .frame(width: 360)
+        .padding(24)
+        .frame(minWidth: 420, maxWidth: 560)
         .fixedSize(horizontal: false, vertical: true)
         .task(id: coordinator.isFinished) {
             guard coordinator.isFinished, coordinator.didSucceed else { return }

@@ -91,6 +91,14 @@ final class RecorderViewModel {
     /// Whether Presenter Overlay is currently active (camera composited into stream)
     private(set) var isPresenterOverlayActive = false
 
+    /// The most recently finished recording, for the menu bar's "Edit Last Recording"
+    /// action. `nil` until a recording has completed at least once this launch.
+    private(set) var lastRecordingURL: URL?
+
+    /// Owns the editor's window - see `EditorWindowCoordinator` for why this is a plain
+    /// `NSWindow` rather than a SwiftUI `WindowGroup`/`openWindow`.
+    let editorWindowCoordinator = EditorWindowCoordinator()
+
     // MARK: - Dependencies
 
     let settings: SettingsStore
@@ -107,7 +115,6 @@ final class RecorderViewModel {
     private let cameraSession = CameraSession()
     private let doNotDisturbService = DoNotDisturbService()
     private let slackStatusService = SlackStatusService()
-    private let postProcessingPanel = PostProcessingPanelCoordinator()
 
     /// The Slack status captured right before recording started, so it can be restored
     /// afterward instead of just clearing it to blank.
@@ -157,6 +164,11 @@ final class RecorderViewModel {
         captureEngine.delegate = self
         captureEngine.sampleBufferDelegate = assetWriter
         previewService.delegate = self
+
+        notificationService.onEditRecordingRequested = { [weak self] url in
+            guard let self else { return }
+            editorWindowCoordinator.show(recordingURL: url, postProcessing: postProcessing)
+        }
     }
 
     // MARK: - Permission Methods
@@ -453,7 +465,6 @@ final class RecorderViewModel {
 
             // Finalize file
             let (outputURL, videoFrameCount) = try await assetWriter.finishWriting()
-            let finishedRecordingDuration = formattedDuration
 
             state = .idle
             recordingDuration = 0
@@ -461,7 +472,8 @@ final class RecorderViewModel {
             logger.info("Recording stopped and saved to: \(outputURL.lastPathComponent)")
             NSSound(named: "Pop")?.play()
 
-            PostProcessingJobFile.write(for: outputURL)
+            CapsterProjectFile.write(for: outputURL)
+            lastRecordingURL = outputURL
 
             await revertRecordingSideEffects()
 
@@ -485,10 +497,10 @@ final class RecorderViewModel {
                 copyFileToClipboard(outputURL)
             }
 
-            if settings.handBrakeTranscodeEnabled || settings.gifExportEnabled || settings.chorusUploadEnabled {
-                postProcessing.start(recordingURL: outputURL, formattedDuration: finishedRecordingDuration)
-                postProcessingPanel.show(coordinator: postProcessing)
-            }
+            // The editor is the default destination after every recording - transcode/GIF
+            // export/Chorus upload (if enabled) run from its Export flow once the user is
+            // done editing, rather than starting automatically here.
+            editorWindowCoordinator.show(recordingURL: outputURL, postProcessing: postProcessing)
 
             settings.stopAccessingOutputDirectory()
 
@@ -546,19 +558,18 @@ final class RecorderViewModel {
         await startRecording()
     }
 
-    /// Restarts the post-processing pipeline (transcode/GIF export/Chorus upload, per
-    /// current Settings) from scratch on an already-recorded video - triggered by opening
-    /// one of its `.capster` job files. A no-op if none of those are currently enabled,
-    /// same as a fresh recording finishing with automation off.
-    func reopenPostProcessing(for recordingURL: URL) {
+    /// Opens the editor for a recording pointed at by an already-saved `.capster` project
+    /// file - triggered by double-clicking one. Validates the recording is still on disk
+    /// first, since the file may have been moved, renamed, or deleted since the project
+    /// file was written.
+    func openEditor(for recordingURL: URL) {
         guard FileManager.default.fileExists(atPath: recordingURL.path(percentEncoded: false)) else {
-            notificationService.sendPostProcessingSourceMissingNotification(fileURL: recordingURL)
-            logger.error("Post-processing job file points at a missing recording: \(recordingURL.lastPathComponent)")
+            notificationService.sendProjectSourceMissingNotification(fileURL: recordingURL)
+            logger.error("Capster project file points at a missing recording: \(recordingURL.lastPathComponent)")
             return
         }
 
-        postProcessing.start(recordingURL: recordingURL)
-        postProcessingPanel.show(coordinator: postProcessing)
+        editorWindowCoordinator.show(recordingURL: recordingURL, postProcessing: postProcessing)
     }
 
     /// Enables everything a recording asks for outside the app itself (macOS Do Not
