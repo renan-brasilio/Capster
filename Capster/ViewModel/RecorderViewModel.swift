@@ -586,7 +586,20 @@ final class RecorderViewModel {
         guard let accessToken = slackSession.accessToken else { return }
 
         if settings.slackStatusEnabled {
-            previousSlackStatus = await slackStatusService.fetchCurrentStatus(accessToken: accessToken)
+            let fetched = await slackStatusService.fetchCurrentStatus(accessToken: accessToken)
+
+            // If the status already showing is the same one this feature would set, it
+            // isn't a real previous status worth restoring later - most likely a prior
+            // recording's revert never ran (e.g. the app was force-quit mid-recording),
+            // leaving the recording status stuck. Treat that the same as no previous
+            // status at all, so `revertRecordingSideEffects()` clears it instead of
+            // "restoring" the stuck recording status right back.
+            if let fetched, fetched.text == settings.slackStatusText, fetched.emoji == settings.slackStatusEmoji {
+                previousSlackStatus = nil
+            } else {
+                previousSlackStatus = fetched
+            }
+
             await slackStatusService.setStatus(
                 text: settings.slackStatusText, emoji: settings.slackStatusEmoji, accessToken: accessToken
             )
