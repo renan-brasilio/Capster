@@ -176,6 +176,16 @@ final class NotificationService: NSObject {
         )
     }
 
+    /// Sends a notification when a `.capster` job file's recording can't be found -
+    /// most likely moved, renamed, or deleted since the job file was created.
+    func sendPostProcessingSourceMissingNotification(fileURL: URL) {
+        send(
+            title: "Recording Not Found",
+            body: "Can't reopen post-processing - \"\(fileURL.lastPathComponent)\" is missing. It may have been moved, renamed, or deleted.",
+            category: NotificationIdentifier.categoryRecordingFailed
+        )
+    }
+
     /// Sends a notification when recording stopped unexpectedly
     /// - Parameter error: Optional error that caused the stop
     func sendRecordingStoppedNotification(error: Error?) {

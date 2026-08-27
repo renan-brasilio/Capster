@@ -461,6 +461,8 @@ final class RecorderViewModel {
             logger.info("Recording stopped and saved to: \(outputURL.lastPathComponent)")
             NSSound(named: "Pop")?.play()
 
+            PostProcessingJobFile.write(for: outputURL)
+
             await revertRecordingSideEffects()
 
             if settings.openFolderAfterRecording {
@@ -542,6 +544,21 @@ final class RecorderViewModel {
         guard isRecording else { return }
         await cancelRecording()
         await startRecording()
+    }
+
+    /// Restarts the post-processing pipeline (transcode/GIF export/Chorus upload, per
+    /// current Settings) from scratch on an already-recorded video - triggered by opening
+    /// one of its `.capster` job files. A no-op if none of those are currently enabled,
+    /// same as a fresh recording finishing with automation off.
+    func reopenPostProcessing(for recordingURL: URL) {
+        guard FileManager.default.fileExists(atPath: recordingURL.path(percentEncoded: false)) else {
+            notificationService.sendPostProcessingSourceMissingNotification(fileURL: recordingURL)
+            logger.error("Post-processing job file points at a missing recording: \(recordingURL.lastPathComponent)")
+            return
+        }
+
+        postProcessing.start(recordingURL: recordingURL)
+        postProcessingPanel.show(coordinator: postProcessing)
     }
 
     /// Enables everything a recording asks for outside the app itself (macOS Do Not

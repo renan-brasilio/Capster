@@ -50,9 +50,27 @@ struct CapsterApp: App {
         }
     }
 
+    // MARK: - File Opens
+
+    /// A double-clicked `.capster` job file arrives here the same way a `capster://` URL
+    /// does - both go through `application(_:open:)`.
+    private func handleFileOpen(_ url: URL) {
+        guard let recordingURL = PostProcessingJobFile.read(from: url) else {
+            logger.error("Couldn't read post-processing job file: \(url.lastPathComponent, privacy: .public)")
+            return
+        }
+        logger.info("Reopening post-processing for: \(recordingURL.lastPathComponent, privacy: .public)")
+        viewModel.reopenPostProcessing(for: recordingURL)
+    }
+
     // MARK: - URL Scheme
 
     private func handleURL(_ url: URL) {
+        if url.isFileURL {
+            handleFileOpen(url)
+            return
+        }
+
         guard url.scheme == "capster" else { return }
         logger.info("Handling capster:// URL with host: \(url.host ?? "nil", privacy: .public)")
 
